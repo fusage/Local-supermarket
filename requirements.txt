@@ -1,0 +1,5 @@
+# v0.1 で使う外部ライブラリ
+# インストール： pip install -r requirements.txt
+streamlit
+pandas
+plotly
