@@ -437,6 +437,15 @@ def table_exists(name: str) -> bool:
     return not df.empty
 
 
+@st.cache_data(show_spinner=False)
+def db_meta() -> dict[str, str]:
+    """DBの素性（lib/real_data.py が組み立てたDBなら、実データの期間や商品数が入っている）。"""
+    if not table_exists("db_meta"):
+        return {}
+    df = q("SELECT key, value FROM db_meta")
+    return dict(zip(df["key"], df["value"]))
+
+
 # --------------------------------------------------------------------------
 # ロス分析（データ班の分析ビュー。定義は scripts/analysis_views.sql）
 # --------------------------------------------------------------------------
