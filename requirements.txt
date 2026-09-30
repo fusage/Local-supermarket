@@ -1,5 +1,11 @@
-# v0.1 で使う外部ライブラリ
-# インストール： pip install -r requirements.txt
-streamlit
-pandas
-plotly
+# 画面（統合ダッシュボード）
+streamlit>=1.50
+pandas>=2.2
+numpy>=1.26
+plotly>=5.20
+# クローラー（競合チラシ・地域イベント）
+requests>=2.31
+beautifulsoup4>=4.12
+lxml>=5.0
+pillow>=10.0
+pytesseract>=0.3.10
