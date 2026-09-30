@@ -1,11 +1,15 @@
 # -*- coding: utf-8 -*-
 """データの統合（3人の成果物を1つのSQLiteファイルにまとめる）
 
-  A フロントエンドのDB   … stores / products / sales など（ER図のテーブル）
-  B データ班のDB         … M_STORE / T_SALES など7テーブル ＋ 分析ビュー3本
+  A 画面が使うテーブル   … stores / products / sales など（ER図のテーブル）
+  B データ班のテーブル   … M_STORE / T_SALES など7テーブル ＋ 分析ビュー3本
   C クローラーの取得結果 … crawl_flyers / crawl_featured_items / crawl_events
 
-AのDBファイルに、BのCSV（data/csv/*.csv）とCの保存用テーブルを足します。
+Aは、データ班のCSV（data/csv/*.csv）があれば、それを正として組み立てます
+（lib/real_data.py。足りない期間・商品・項目は補完）。CSVが無いときだけ、
+暫定ダミーデータ（lib/sample_data.py）になります。
+そのDBファイルに、BのCSVとCの保存用テーブルを足します。
+
 何度呼んでも同じ結果になる（足りないものだけ作る）ので、起動のたびに呼んで構いません。
 このファイルは streamlit を読み込まないので、scripts/ からも使えます。
 """
@@ -15,7 +19,8 @@ import csv
 import sqlite3
 from pathlib import Path
 
-from lib.paths import CSV_DIR, VIEWS_SQL
+from lib import real_data, sample_data
+from lib.paths import CSV_DIR, REAL_DB, VIEWS_SQL, resolve_db_path
 
 # --------------------------------------------------------------------------
 # B データ班のテーブル（CSVと同じ名前・同じ列）
@@ -201,3 +206,27 @@ def ensure(db_path: str | Path, force: bool = False) -> None:
     finally:
         con.close()
     _done.add(key)
+
+
+# --------------------------------------------------------------------------
+# DBファイルそのものを作る
+# --------------------------------------------------------------------------
+def plan() -> tuple[Path, str, bool]:
+    """使うDBファイル、その種別（real / dummy）、これから作る必要があるか、を返す。
+
+    data/supermarket.db がすでにあれば（手で置いたものでも）そのまま使う。
+    無ければ、データ班のCSVから本番DBを組み立てる。CSVも無ければ暫定ダミーデータ。
+    """
+    path, kind = resolve_db_path()
+    if kind == "dummy" and real_data.available():
+        path, kind = REAL_DB, "real"
+    return path, kind, not path.exists()
+
+
+def build(path: Path, kind: str, progress=None) -> None:
+    """DBファイルを作る。作りかけを読まれないよう、別名で作ってから置き換える。"""
+    tmp = path.with_name(path.name + ".building")
+    generate = real_data.generate if kind == "real" else sample_data.generate
+    generate(tmp, progress=progress)
+    ensure(tmp)
+    tmp.replace(path)

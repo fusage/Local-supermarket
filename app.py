@@ -3,7 +3,7 @@
 
 役割分担（第5回打ち合わせ 2026/9/23）
   A フロントエンド（このファイル）… ヨッシー
-  B データモデル・ダミーデータ      … 藤井さん  → data/supermarket.db を置けば自動で切り替わります
+  B データモデル・ダミーデータ      … 藤井さん  → data/csv/*.csv から data/supermarket.db を組み立てます
   C 検索・クローラー                … tomさん   → lib/search_engine.py を置けば自動で読み込みます
 
 3人の成果物を1つにまとめた統合版です。画面はサイドバー上部のメニューで切り替えます。
@@ -61,24 +61,26 @@ def _build_lock() -> threading.Lock:
 
 
 def ensure_database() -> str:
-    """DBが無ければ暫定ダミーデータを生成し、データ班・クローラーのテーブルを統合する。"""
-    path, kind = db.resolve_db_path()
+    """DBが無ければ作り、データ班・クローラーのテーブルを統合する。
+
+    データ班のCSV（data/csv）があれば、それを正として本番DBを組み立てる（lib/real_data.py）。
+    CSVが無いときだけ、暫定ダミーデータ（lib/sample_data.py）になる。
+    """
     with _build_lock():
-        if not path.exists():
-            with st.status("初回のみ：暫定ダミーデータを生成しています（30秒ほど）", expanded=True) as s:
+        path, kind, missing = integrate.plan()
+        if missing:
+            label = ("初回のみ：データ班のデータからデータベースを組み立てています（30秒ほど）"
+                     if kind == "real" else "初回のみ：暫定ダミーデータを生成しています（30秒ほど）")
+            with st.status(label, expanded=True) as s:
                 bar = st.progress(0.0)
-                from lib import sample_data
 
                 def _p(msg: str, ratio: float):
                     s.write(msg)
                     bar.progress(ratio)
 
-                # 作りかけのファイルを読まれないよう、別名で作ってから置き換える
-                tmp = path.with_name(path.name + ".building")
-                sample_data.generate(tmp, progress=_p)
-                integrate.ensure(tmp)
-                tmp.replace(path)
-                s.update(label="ダミーデータの生成が完了しました", state="complete")
+                integrate.build(path, kind, progress=_p)
+                st.cache_data.clear()       # 別のDBを見ていたときの集計結果を捨てる
+                s.update(label="データベースの準備が完了しました", state="complete")
         integrate.ensure(path)      # 足りないテーブルだけ作る（2回目以降は何もしない）
     return kind
 
@@ -89,10 +91,17 @@ def ensure_database() -> str:
 def sidebar(kind: str) -> dict:
     st.sidebar.title("🛒 統合ダッシュボード")
 
-    if kind == "real":
+    meta = db.db_meta()
+    if kind == "real" and meta.get("real_from"):
+        st.sidebar.success(f"データ班のデータ（サンフジ{meta['stores']}店舗）で動作中", icon="✅")
+        st.sidebar.caption(
+            f"{meta['real_from']} 〜 {meta['real_to']} のデータ班{meta['real_products']}商品は、"
+            "データ班のデータそのままです。それ以外の期間、追加した"
+            f"{meta['added_products']}商品、予算・客数などは、補完した生成データです。")
+    elif kind == "real":
         st.sidebar.success("本番データ（data/supermarket.db）を読み込み中", icon="✅")
     else:
-        st.sidebar.warning("暫定ダミーデータで動作中（藤井さんの本番データ待ち）", icon="⚠️")
+        st.sidebar.warning("暫定ダミーデータで動作中（データ班のCSVが見つかりません）", icon="⚠️")
 
     role = st.sidebar.radio("見る立場", list(ROLES.keys()), index=0,
                             help="立場ごとに見たい指標が違うため、画面を切り替えます")
