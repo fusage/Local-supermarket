@@ -2,9 +2,9 @@ import csv
 import os
 import sys
 
-# 1つ上の階層にある config.py を読み込む設定
+# 1つ上の階層にある lib/paths.py からCSVの置き場所を読み込む設定
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from config import CSV_DIR
+from lib.paths import CSV_DIR
 
 # 1. 店舗マスタデータ定義（商圏タイプ付き）
 stores = [
