@@ -9,3 +9,7 @@ beautifulsoup4>=4.12
 lxml>=5.0
 pillow>=10.0
 pytesseract>=0.3.10
+# GCP（BigQuery・Cloud Storage。設定があるときだけ使う。lib/gcp.py）
+google-cloud-bigquery>=3.20
+google-cloud-storage>=2.16
+db-dtypes>=1.2

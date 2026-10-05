@@ -3,10 +3,12 @@
 
   ① 競合チラシ情報 … lib/crawler/competitor_flyer_scraper.py（＋OCR: flyer_item_extractor.py）
   ② 来月のイベント … lib/crawler/kanazawa_events_scraper.py
-  ③ 天気           … 準備中
+  ③ 卸売相場       … 農林水産省 青果物卸売市場調査（日別）金沢市中央卸売市場（lib/collect.py）
+  ④ 天気           … Open-Meteo（lib/collect.py）
 
-取得に成功した結果は統合DB（crawl_* テーブル）に保存します。
-サイト側の都合で取得に失敗したときは、前回保存したぶんを表示します。
+ふだんは、毎朝の自動収集（scripts/collect.py → data/raw → 統合DB）で貯めたぶんの最新を表示します。
+まだ1度も集めていないときや「今すぐ取得し直す」を押したときだけ、その場でサイトから取得し、
+統合DB（crawl_* テーブル）に保存します。取得に失敗したときは、前回保存したぶんを表示します。
 """
 from __future__ import annotations
 
@@ -15,20 +17,17 @@ import logging
 import pandas as pd
 import streamlit as st
 
+from lib import charts as ch
 from lib import crawl_store
 
 logger = logging.getLogger(__name__)
 
 try:        # クローラーに必要なライブラリが無い環境でも、ほかの画面は動くようにする
-    from lib.crawler.competitor_flyer_scraper import AeonFlyerScraper, TokubaiFlyerScraper
+    from lib import collect
     from lib.crawler.flyer_item_extractor import OcrNotAvailableError, extract_items
-    from lib.crawler.kanazawa_events_scraper import fetch_all_events, filter_next_month, to_records
     IMPORT_ERROR = None
 except Exception as e:  # noqa: BLE001
     IMPORT_ERROR = str(e)
-
-AEON = "イオン金沢店"
-SUGI = "スギ薬局 金沢駅西店"
 
 
 def _save(func, *args) -> None:
@@ -45,17 +44,15 @@ def _save(func, *args) -> None:
 @st.cache_data(ttl=60 * 60, show_spinner=False)  # 1時間キャッシュ
 def load_next_month_events():
     """
-    金沢市イベント一覧を取得し、来月開催分に絞り込んだレコードを返す。
+    金沢市イベント一覧をその場で取得して全件を保存し、来月開催分に絞り込んだレコードを返す。
     サイト構造の変化等で失敗した場合は例外を送出せず、
     (レコード一覧, エラーメッセージ) のタプルで返す。
     """
     try:
-        all_events = fetch_all_events()
-        next_month_events = filter_next_month(all_events)
-        records = to_records(next_month_events)
+        records = collect.fetch_events()
         if records:
             _save(crawl_store.save_events, records)
-        return records, None
+        return collect.next_month(records), None
     except Exception as e:
         logger.exception("イベント取得に失敗しました")
         return [], str(e)
@@ -64,50 +61,29 @@ def load_next_month_events():
 @st.cache_data(ttl=60 * 60, show_spinner=False)  # 1時間キャッシュ
 def load_flyers():
     """
-    競合2店舗のチラシ情報を取得する。店舗ごとに独立して try/except し、
+    競合店のチラシ情報をその場で取得する。店舗ごとに独立して try/except し、
     片方が失敗してももう片方は表示できるようにする。
     戻り値: {店舗名: {"flyers": [dictのリスト], "pickup": [dictのリスト], "error": str | None}}
     """
     results = {}
-
-    # --- イオン金沢店 ---
-    name = AEON
-    try:
-        aeon = AeonFlyerScraper(
-            flyer_page_url="https://www.aeon.com/store/イオン/イオン金沢店/flyer/",
-            store_name=name,
-        )
-        flyers = [vars(f) for f in aeon.fetch()]
-        _save(crawl_store.save_flyers, name, flyers)
-        results[name] = {"flyers": flyers, "pickup": [], "error": None}
-    except Exception as e:
-        logger.exception("%s のチラシ取得に失敗", name)
-        results[name] = {"flyers": [], "pickup": [], "error": str(e)}
-
-    # --- スギ薬局 金沢駅西店 (トクバイ経由) ---
-    name = SUGI
-    try:
-        sugi = TokubaiFlyerScraper.from_store_page(
-            store_page_url="https://www.sugi-net.jp/stores/001612",
-            store_name=name,
-        )
-        sugi_flyers = sugi.fetch(count=6)
-        pickup = []
-        if sugi_flyers:
-            try:
-                pickup = sugi.fetch_featured_items(sugi_flyers[0].detail_url)
-            except Exception as e:  # 特売商品は補助情報なので、失敗してもチラシ表示は続ける
-                logger.warning("特売商品の取得に失敗: %s", e)
-        flyers = [vars(f) for f in sugi_flyers]
-        _save(crawl_store.save_flyers, name, flyers)
-        if pickup:
-            _save(crawl_store.save_featured_items, name, pickup)
-        results[name] = {"flyers": flyers, "pickup": pickup, "error": None}
-    except Exception as e:
-        logger.exception("%s のチラシ取得に失敗", name)
-        results[name] = {"flyers": [], "pickup": [], "error": str(e)}
-
+    for name, fetch in collect.COMPETITORS.items():
+        try:
+            flyers, pickup = fetch()
+            _save(crawl_store.save_flyers, name, flyers)
+            if pickup:
+                _save(crawl_store.save_featured_items, name, pickup)
+            results[name] = {"flyers": flyers, "pickup": pickup, "error": None}
+        except Exception as e:
+            logger.exception("%s のチラシ取得に失敗", name)
+            results[name] = {"flyers": [], "pickup": [], "error": str(e)}
     return results
+
+
+def saved_flyers() -> dict:
+    """自動収集などで保存済みのチラシ（店舗ごとに最新の1回ぶん）。load_flyers と同じ形で返す。"""
+    return {name: {"flyers": crawl_store.load_flyers(name),
+                   "pickup": crawl_store.featured_as_crawler_records(name), "error": None}
+            for name in collect.COMPETITORS}
 
 
 @st.cache_data(ttl=60 * 60 * 24, show_spinner=False)  # 同じ画像は24時間キャッシュ(OCRは1枚数秒かかるため)
@@ -276,11 +252,17 @@ def _flyer_store_tab(store_name: str, result: dict) -> None:
 def _section_flyers() -> None:
     st.header("競合チラシ情報")
 
-    if st.button("🔄 チラシ情報を更新"):
+    if st.button("🔄 今すぐ取得し直す", key="refetch_flyers"):
         load_flyers.clear()
+        st.session_state["flyers_live"] = True
 
-    with st.spinner("競合店のチラシ情報を取得中...（初回は30秒ほどかかります）"):
-        flyer_results = load_flyers()
+    fetched = crawl_store.last_fetched("crawl_flyers")
+    if fetched and not st.session_state.get("flyers_live"):
+        flyer_results = saved_flyers()
+        st.caption(f"自動収集などで保存したデータ（{fetched} 取得）を表示しています。")
+    else:
+        with st.spinner("競合店のチラシ情報を取得中...（30秒ほどかかります）"):
+            flyer_results = load_flyers()
 
     store_tabs = st.tabs(list(flyer_results.keys()))
     for tab, (store_name, result) in zip(store_tabs, flyer_results.items()):
@@ -301,16 +283,22 @@ def _section_events() -> None:
 
     col_reload, col_view = st.columns([1, 3])
     with col_reload:
-        if st.button("🔄 最新の情報に更新"):
+        if st.button("🔄 今すぐ取得し直す", key="refetch_events"):
             load_next_month_events.clear()  # キャッシュを破棄して再取得させる
+            st.session_state["events_live"] = True
 
     with col_view:
         view_mode = st.radio(
             "表示形式", ["テーブル", "カード(画像付き)"], horizontal=True, label_visibility="collapsed"
         )
 
-    with st.spinner("金沢市公式サイトからイベント情報を取得中..."):
-        records, error = load_next_month_events()
+    saved, fetched_at = crawl_store.load_events()
+    if saved and not st.session_state.get("events_live"):
+        records, error = collect.next_month(saved), None
+        st.caption(f"自動収集などで保存したデータ（{fetched_at} 取得）を表示しています。")
+    else:
+        with st.spinner("金沢市公式サイトからイベント情報を取得中..."):
+            records, error = load_next_month_events()
 
     if error:
         # 取得に失敗したら、前回DBに保存したぶんを表示する
@@ -324,7 +312,7 @@ def _section_events() -> None:
         st.warning(
             f"イベント情報を取得できなかったため、前回保存したぶん（{fetched_at} 取得）を表示しています。"
             f"\n\n詳細: {error}")
-        records = saved
+        records = collect.next_month(saved)
     elif not records:
         st.warning(
             "来月開催のイベントが0件でした。取得ロジック(セレクタ)が実際のページ構造と "
@@ -368,8 +356,8 @@ def render() -> None:
     st.subheader("競合・地域情報")
     st.caption("競合店のチラシ・特売と、地域のイベントをウェブから集めて表示する画面です。")
     st.sidebar.info(
-        "この画面は外部サイトから実際の情報を取得します（ダミーデータではありません）。"
-        "取得結果は統合DBの crawl_* テーブルに保存されます。", icon="ℹ️")
+        "この画面は外部サイトから集めた実際の情報です（ダミーデータではありません）。"
+        "毎朝自動で集め、統合DBの crawl_* テーブルに履歴として貯めています。", icon="ℹ️")
 
     if IMPORT_ERROR:
         st.error(
@@ -380,7 +368,83 @@ def render() -> None:
 
     _section_flyers()
     _section_events()
+    _section_wholesale()
+    _section_weather()
 
-    # ③天気(後続で実装)
+
+# ---------------------------------------------------------------------------
+# ③卸売相場（仕入れ交渉の根拠）
+# ---------------------------------------------------------------------------
+RECENT_DAYS, BASE_DAYS = 5, 20      # 直近5取引日の平均を、その前の20取引日の平均と比べる
+
+
+def market_moves(df: pd.DataFrame) -> pd.DataFrame:
+    """品目ごとに、直近の相場がその前と比べてどれだけ動いたか（大きく下がった品目が交渉の材料）。"""
+    df = df[~df["item"].str.endswith("計") & df["price_per_kg"].notna()]
+    dates = sorted(df["date"].unique())
+    if len(dates) < RECENT_DAYS + 5:
+        return pd.DataFrame()
+    recent, base = dates[-RECENT_DAYS:], dates[-(RECENT_DAYS + BASE_DAYS):-RECENT_DAYS]
+    now = df[df["date"].isin(recent)].groupby(["category", "item"])["price_per_kg"].mean().rename("now")
+    before = df[df["date"].isin(base)].groupby(["category", "item"])["price_per_kg"].mean().rename("before")
+    out = pd.concat([now, before], axis=1).dropna().reset_index()
+    out["change"] = (out["now"] / out["before"] - 1) * 100
+    return out.sort_values("change")
+
+
+def _section_wholesale() -> None:
+    st.header("卸売相場（金沢市中央卸売市場）")
+    df = crawl_store.load_market()
+    if df.empty:
+        st.info("卸売相場はまだ集めていません。毎朝の自動収集（scripts/collect.py）で貯まります。")
+        return
+    first, last = df["date"].min(), df["date"].max()
+    st.caption(f"農林水産省「青果物卸売市場調査（日別調査）」の公表値。{first}〜{last}の"
+               f"{df['date'].nunique()}取引日・1kgあたりの卸売価格。公表は約1か月遅れのため、"
+               "その日の相場ではなく「相場の傾向」を見る用途です。")
+
+    moves = market_moves(df)
+    if not moves.empty:
+        st.markdown("##### 相場が下がっている品目")
+        st.caption(f"直近{RECENT_DAYS}取引日の平均を、その前の{BASE_DAYS}取引日の平均と比べています。"
+                   "相場が下がっているのに仕入れ値が据え置きなら、見直しを求める根拠になります。")
+        st.dataframe(
+            moves.head(8), hide_index=True, width="stretch",
+            column_config={
+                "category": "区分", "item": "品目",
+                "now": st.column_config.NumberColumn("直近の相場", format="%d円/kg"),
+                "before": st.column_config.NumberColumn("その前の相場", format="%d円/kg"),
+                "change": st.column_config.NumberColumn("変化", format="%+.1f%%"),
+            })
+
+    items = sorted(df.loc[~df["item"].str.endswith("計"), "item"].unique())
+    default = items.index("キャベツ") if "キャベツ" in items else 0
+    item = st.selectbox("相場の推移を見る品目", items, index=default, key="wholesale_item")
+    one = df[df["item"] == item].sort_values("date")
+    st.plotly_chart(ch.daily_line(one, "date", "price_per_kg", height=240, name=item, unit="円/kg"),
+                    width="stretch")
+    st.download_button(
+        f"{item}の相場をCSVでダウンロード（交渉資料用）",
+        one[["date", "market", "item", "price_per_kg", "quantity_kg"]].to_csv(index=False).encode("utf-8-sig"),
+        file_name=f"wholesale_{item}.csv", mime="text/csv", key="dl_wholesale")
+
+
+# ---------------------------------------------------------------------------
+# ③天気
+# ---------------------------------------------------------------------------
+def _section_weather() -> None:
     st.header("金沢の天気")
-    st.caption("準備中：明日・明後日の天気/気温/湿度をここに表示予定")
+    df = crawl_store.load_weather("KNZ")
+    if df.empty:
+        st.info("天気はまだ集めていません。毎朝の自動収集（scripts/collect.py）で貯まります。")
+        return
+    today = pd.Timestamp.now(tz="Asia/Tokyo").strftime("%Y-%m-%d")
+    coming = df[df["date"] >= today].head(3)
+    cols = st.columns(max(len(coming), 1))
+    for col, (_, r) in zip(cols, coming.iterrows()):
+        diff = r["temp_diff_prev_day"]
+        col.metric(f"{r['date'][5:]}　{r['weather'] or ''}", f"{r['max_temp']:.1f}℃",
+                   None if pd.isna(diff) else f"{diff:+.1f}℃（前日比）", delta_color="off")
+        col.caption(f"最低 {r['min_temp']:.1f}℃")
+    st.caption(f"大きい数字が最高気温。Open-Meteo の予報（{df['fetched_at'].max()} 取得）。"
+               "過去の実績は「データ基盤」画面で見られます。")

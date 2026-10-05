@@ -8,8 +8,10 @@
 
 3人の成果物を1つにまとめた統合版です。画面はサイドバー上部のメニューで切り替えます。
   統合ダッシュボード … このファイル（経営／バイヤー／部門担当）
+  明日の発注提案     … views/order.py  （天気を見る発注のおすすめ。計算は lib/forecast.py）
   ロス分析           … views/loss.py   （データ班のテーブルと分析ビュー）
   競合・地域情報     … views/market.py （クローラー）
+  データ基盤         … views/pipeline.py（毎朝の自動収集で貯めたデータの状況）
 
 起動方法:  streamlit run app.py
 """
@@ -23,7 +25,7 @@ import streamlit as st
 
 from lib import charts as ch
 from lib import crawl_store, db, integrate
-from views import loss, market
+from views import loss, market, order, pipeline
 
 # --- 他メンバーのモジュールがあれば使う（無くても動く） --------------------
 try:                                   # tomさん担当：自然言語→SQLの検索エンジン
@@ -81,7 +83,7 @@ def ensure_database() -> str:
                 integrate.build(path, kind, progress=_p)
                 st.cache_data.clear()       # 別のDBを見ていたときの集計結果を捨てる
                 s.update(label="データベースの準備が完了しました", state="complete")
-        integrate.ensure(path)      # 足りないテーブルだけ作る（2回目以降は何もしない）
+        integrate.ensure(path)      # 足りないテーブルだけ作る。data/raw に増えたぶんがあれば取り込む
     return kind
 
 
@@ -628,8 +630,10 @@ def main() -> None:
     ensure_database()
     nav = st.navigation([
         st.Page(page_dashboard, title="統合ダッシュボード", icon="🛒", default=True),
+        st.Page(order.render, title="明日の発注提案", icon="📋", url_path="order"),
         st.Page(loss.render, title="ロス分析", icon="📉", url_path="loss"),
         st.Page(market.render, title="競合・地域情報", icon="📰", url_path="market"),
+        st.Page(pipeline.render, title="データ基盤", icon="🗄️", url_path="pipeline"),
     ])
     nav.run()
 

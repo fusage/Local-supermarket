@@ -524,60 +524,55 @@ class TokubaiFlyerScraper:
 
 class AeonFlyerScraper:
     """
-    イオン金沢店のチラシページから、掲載有無と(掲載がある場合の)
-    画像URL/リンクを取得する。
-
-    注意:
-      イオンのチラシはShufoo!というサービスのJSウィジェットで描画されるため、
-      requestsで取得した素のHTMLには反映されていないケースが多い
-      (実際に確認した時点でも「ただいまチラシの掲載はございません」の
-      固定テキストのみだった)。
-      本格的に取得したい場合は、以下いずれかの対応が必要になる:
-        (a) Shufoo!側が提供する店舗別チラシAPI/フィードを直接叩く
-            (店舗コードの特定が必要)
-        (b) Selenium/Playwright等でヘッドレスブラウザによりJS実行後のDOMを取得する
-      本関数はまず「掲載されているかどうか」の判定と、
-      掲載時の素朴な抽出(og:imageやimgタグ)をベストエフォートで行う。
+    イオンのチラシを、aeonsquare のチラシビューアが読み込むJSON
+    (https://chirashi.otoku.aeonsquare.net/viewer/json/{店舗コード}.json) から直接取得する。
+    店舗コードはチラシビューアのURLの s_id (例: 0000058040) の下7桁。
+    1枚のチラシに複数ページがある場合は、ページ(画像)ごとに1件として返す。
     """
 
-    NO_FLYER_TEXT = "ただいまチラシの掲載はございません"
+    BASE_URL = "https://chirashi.otoku.aeonsquare.net/viewer"
 
-    def __init__(self, flyer_page_url: str, store_name: str):
-        self.flyer_page_url = flyer_page_url
+    def __init__(self, shop_code: str, store_name: str):
+        self.shop_code = shop_code
         self.store_name = store_name
 
     def fetch(self) -> List[FlyerEntry]:
-        resp = requests.get(self.flyer_page_url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
+        url = f"{self.BASE_URL}/json/{self.shop_code}.json"
+        resp = requests.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
         resp.raise_for_status()
-        resp.encoding = "utf-8"  # charset未指定サイトでの文字化け対策
-        soup = BeautifulSoup(resp.text, "lxml")
-        page_text = soup.get_text()
+        fliers = resp.json().get("fliers") or {}
+        if isinstance(fliers, dict):
+            fliers = list(fliers.values())
 
-        if self.NO_FLYER_TEXT in page_text:
-            logger.info("[%s] 現在チラシの掲載はありません。", self.store_name)
-            return []
-
-        # 掲載がある場合の簡易抽出(サイト構造変更時は要調整)
         entries: List[FlyerEntry] = []
-        # チラシ画像は "flyer" や "chirashi" を含むimgタグ配下にあることが多い
-        candidate_imgs = [
-            img for img in soup.find_all("img")
-            if img.has_attr("src") and re.search(r"flyer|chirashi", img["src"], re.I)
-        ]
-        for img in candidate_imgs:
-            parent_a = img.find_parent("a")
-            entries.append(
-                FlyerEntry(
-                    store_name=self.store_name,
-                    title=img.get("alt", "イオン金沢店チラシ"),
-                    image_url=img["src"],
-                    detail_url=parent_a["href"] if parent_a and parent_a.has_attr("href") else None,
+        for flier in fliers:
+            fid = str(flier.get("fid", ""))
+            no = str(flier.get("no", "1"))
+            start = str(flier.get("start") or "")
+            end = str(flier.get("end") or "")
+            images = flier.get("images") or []
+            detail_url = f"{self.BASE_URL}/index.html?d=pc&s_id=000{self.shop_code}&f_id=f{fid}"
+            for page, image in enumerate(images, start=1):
+                title = flier.get("title") or "イオンチラシ"
+                if len(images) > 1:
+                    title = f"{title}({page}/{len(images)})"
+                entries.append(
+                    FlyerEntry(
+                        store_name=self.store_name,
+                        title=title,
+                        period_text=f"{start}〜{end}",
+                        period_start=start[:10] or None,
+                        period_end=end[:10] or None,
+                        image_url=f"{self.BASE_URL}/images/{image}",
+                        detail_url=detail_url,
+                        leaflet_id=f"{fid}-{no}-{page}",
+                    )
                 )
-            )
+
+        logger.info("[%s] チラシ画像 %d 件を取得しました。", self.store_name, len(entries))
         if not entries:
             logger.warning(
-                "[%s] チラシ掲載ありと判定したが、画像を自動抽出できなかった。"
-                "サイト構造が変わっている可能性あり。手動確認を推奨。",
+                "[%s] チラシが0件でした。掲載なし、または店舗コード・JSON構造の変更の可能性があります。",
                 self.store_name,
             )
         return entries
@@ -599,7 +594,7 @@ def main():
 
     # --- イオン金沢店 ---
     aeon = AeonFlyerScraper(
-        flyer_page_url="https://www.aeon.com/store/イオン/イオン金沢店/flyer/",
+        shop_code="0058040",
         store_name="イオン金沢店",
     )
     try:

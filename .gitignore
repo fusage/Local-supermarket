@@ -10,3 +10,6 @@ data/*.db-journal
 # APIキーなどの秘密情報
 .streamlit/secrets.toml
 data/*.db.building
+
+# 生データの書きかけ（scripts/collect.py が書き終えたら名前を変える）
+data/raw/**/*.tmp
