@@ -7,7 +7,8 @@
 |---|---|---|
 | 🛒 統合ダッシュボード | 経営／バイヤー／部門担当の3つの立場、横断検索 | A フロントエンド |
 | 📉 ロス分析 | 3大ロス（廃棄・値引・機会ロス）、気温急変日の発注検証、夕方の見切り候補 | B データ班 |
-| 📰 競合・地域情報 | 競合店のチラシ・特売商品、チラシのOCR、金沢市の来月のイベント | C クローラー |
+| 📰 競合・地域情報 | 競合店のチラシ・特売商品、チラシのOCR、金沢市の来月のイベント、金沢の天気 | C クローラー |
+| 🗄️ データ基盤 | 毎朝の自動収集で貯めたデータの状況（鮮度・件数）、天気の記録、競合特売の記録 | 統合 |
 
 ---
 
@@ -34,7 +35,7 @@ streamlit run app.py
 |---|---|---|
 | A 画面用（ER図のテーブル） | `stores` `departments` `products` `sales` `inventory` `waste` `stockouts` `purchases` `budgets` `customers_daily` `competitors` `competitor_prices` `knowledge` ほか | **データ班のCSVを正として組み立て、足りない部分を補完**（`lib/real_data.py`。下の「補完のしかた」） |
 | B データ班 | `M_STORE` `M_PRODUCT` `M_WEATHER` `T_SALES` `T_ORDER` `T_INVENTORY` `T_WASTE_DISCOUNT` ＋ ビュー `V_STORE_LOSS_SUMMARY` `V_WEATHER_HYPOTHESIS_CHECK` `V_EVENING_DISCOUNT_CANDIDATES` | `data/csv/*.csv` を取り込み、`scripts/analysis_views.sql` でビューを作成 |
-| C クローラー | `crawl_flyers` `crawl_featured_items` `crawl_events` | 「競合・地域情報」画面を開いたときに取得して保存（最新の1回ぶん） |
+| C 外部データ（履歴） | `crawl_flyers` `crawl_featured_items` `crawl_events` `crawl_weather` ＋ 最新1回ぶんのビュー `*_latest`、取り込み記録 `_ingest_log` | 毎朝の自動収集で `data/raw/` に貯めた生データを取り込む（下の「外部データを貯めるしくみ」） |
 
 統合は `lib/integrate.py` が行います。**足りないテーブルだけ作る**ので、起動のたびに呼ばれても害はありません。
 
@@ -44,6 +45,56 @@ streamlit run app.py
 python scripts/build_db.py           # DBが無ければ作る（テーブルと件数の一覧も出ます）
 python scripts/build_db.py --all     # data/csv/*.csv から全部作り直す（CSVを更新したとき）
 ```
+
+### 外部データを貯めるしくみ（データ基盤）
+
+```
+① GitHub Actions（.github/workflows/collect.yml）が毎朝6時に scripts/collect.py を実行
+② 天気・イベント・競合チラシを集め、data/raw/<種類>/<日付>.csv に書き出してコミット
+③ アプリが、まだ取り込んでいないファイルだけ統合DB（crawl_*）に追記
+④ 画面は *_latest ビュー（最新の1回ぶん）や履歴を読む
+```
+
+| 層 | 置き場所 | 中身 |
+|---|---|---|
+| 生データ（raw） | `data/raw/<種類>/<日付>.csv`（GitHubに上げる） | 取得したままの記録。**1日1ファイルずつ足していき、過去の日のファイルは書き換えない**（同じ日に取り直したら、その日のファイルだけ置き換わる） |
+| 履歴（staging） | DBの `crawl_*` | 生データを型をそろえて全部入れたもの。`fetched_at`（取得日時）・`source_file`（どのファイルから来たか）付き |
+| 画面用（mart） | DBのビュー `crawl_*_latest` | 最新の1回ぶん。天気は日ごとに一番新しい取得を採用し、前日差（`temp_diff_prev_day`）も計算 |
+
+- **生データが「正」、DBは派生物**です。DBが消えても、`data/raw` から同じ履歴が作り直されます（Streamlit Cloud が再起動しても履歴は消えません）。
+- 取り込み済みのファイルは `_ingest_log` に記録し、中身が変わったファイルだけ入れ直すので、何度取り込んでも行が重複しません。
+- 「競合・地域情報」の「今すぐ取得し直す」で取ったぶんは、DBにだけ保存します（`source_file='live'`、店舗ごとに直近1回ぶん）。履歴は毎朝の自動収集で持ちます。
+- 天気は Open-Meteo（無料・APIキー不要）から、富山市（`REG01`＝データ班の `M_WEATHER` と同じコード）と金沢市（`KNZ`）を取っています。
+  過去7日＋今日から3日を毎日取るので、予報はやがて実績で置き換わります。地点を増やすときは `lib/collect.py` の `WEATHER_POINTS` に1行足します。
+- 集めた結果が0件・必須の列が空・価格が数値でない、といったときは生データに書き出さず失敗扱いにします（`lib/collect.py` の `SCHEMAS`）。
+
+手元で集めるとき（アプリを起動したままでも実行できます）：
+
+```bash
+python scripts/collect.py                         # 全部集めて data/raw に書き出す
+python scripts/collect.py --only weather --load   # 天気だけ集めて、手元のDBにも取り込む
+```
+
+### GCP で動かす（毎朝の収集は Cloud Run、保存は Cloud Storage と BigQuery）
+
+**手順は [docs/gcp.md](docs/gcp.md)** にまとめてあります（Cloud Shell でコマンドを順に実行するだけです）。
+
+```
+Cloud Scheduler（毎朝6時）→ Cloud Run ジョブ（scripts/collect.py）
+  → Cloud Storage gs://<バケット>/raw/<種類>/<日付>.csv（生データ）
+  → BigQuery 外部テーブル raw_* → ビュー crawl_* / crawl_*_latest / _ingest_log → 画面
+データ班のCSV → BigQuery の M_* / T_* と分析ビュー V_* →「ロス分析」
+```
+
+- Streamlit の Secrets に `[gcp]`（プロジェクト・バケット）と `[gcp_service_account]`（読み取り専用の鍵）を入れると、
+  「競合・地域情報」「データ基盤」「ロス分析」が BigQuery を読むようになります（`lib/gcp.py`）。入れなければ上の SQLite 版のままです。
+- 統合ダッシュボードの画面用テーブル（生成した2年分の売上など）は、GCP版でも SQLite のままです。
+- BigQuery につながらないときは「データ基盤」に警告を出し、「ロス分析」は手元の SQLite で表示を続けます。
+- GCP版では、画面の「今すぐ取得し直す」は表示するだけで保存しません（BigQuery は画面からは読むだけ）。
+
+GCP を使わずに GitHub Actions で集める場合は、`.github/workflows/collect.yml` の `schedule` のコメントを外し、
+リポジトリの Settings → Actions → General → Workflow permissions を「Read and write permissions」にします
+（定期実行は既定ブランチ main にあるワークフローだけが動きます）。
 
 ### 補完のしかた（画面用のテーブル）
 
@@ -77,6 +128,9 @@ python scripts/build_db.py --all     # data/csv/*.csv から全部作り直す�
   バイヤー画面の「競合価格との比較」のグラフは生成した競合価格（`competitor_prices`）のままで、
   クローラーが集めた実データはその下に一覧で出しています。
 - 舞台の地域が、データ班は富山市、クローラーは金沢市（イオン金沢店・スギ薬局 金沢駅西店・金沢市のイベント）で、そろっていません。
+  天気だけは両方の地域を貯めています。どちらに寄せて貯めていくか決めたいところです。
+- 毎朝貯めている天気（`crawl_weather_latest`）は、まだ「ロス分析」の気温急変日の検証（`M_WEATHER`）にはつないでいません。
+  データ班の数字を照合済みのまま保つためです。発注・販売の実データが日々入るようになったら、つなぐ候補です。
 - 「ロス分析」の発注・値引・機会ロス（`T_ORDER` ほか）は、データ班の7日分だけです（2年ぶんには延ばしていません）。
 
 ---
@@ -88,20 +142,29 @@ python scripts/build_db.py --all     # data/csv/*.csv から全部作り直す�
 | `app.py` | 入口。画面の切り替えと、統合ダッシュボード（サイドバー・検索・3つの立場） | A |
 | `views/loss.py` | ロス分析の画面 | B（画面は統合時に作成） |
 | `views/market.py` | 競合・地域情報の画面 | C |
+| `views/pipeline.py` | データ基盤の画面（自動収集の状況・貯まったデータ） | 統合 |
 | `lib/db.py` | DB接続と集計クエリ。**画面から使うデータの窓口** | A |
 | `lib/charts.py` | グラフの共通設定（配色・書式） | A |
 | `lib/real_data.py` | **本番DBの組み立て**（データ班のCSVを正として、足りない部分を補完） | 統合 |
 | `lib/sample_data.py` | 暫定ダミーデータ生成（データ班のCSVが無いときだけ使う。補完用の商品表・季節係数の出どころでもある） | A（仮） |
-| `lib/paths.py` | ファイルの置き場所（DB・CSV） | 統合 |
-| `lib/integrate.py` | データの統合（CSV取り込み・ビュー作成・クローラー用テーブル） | 統合 |
+| `lib/paths.py` | ファイルの置き場所（DB・CSV・生データ） | 統合 |
+| `lib/integrate.py` | データの統合（CSV取り込み・ビュー作成・生データの差分取り込み） | 統合 |
+| `lib/collect.py` | 外部データの収集とチェック、生データへの書き出し（天気は Open-Meteo） | 統合 |
+| `lib/gcp.py` | GCP（Cloud Storage・BigQuery）とのやりとり。設定があるときだけ使う | 統合 |
 | `lib/crawl_store.py` | クローラーの取得結果をDBに保存・読み出し | 統合 |
 | `lib/crawler/competitor_flyer_scraper.py` | 競合チラシ・特売商品の取得（イオン／トクバイ） | C |
 | `lib/crawler/flyer_item_extractor.py` | チラシ画像のOCR（Tesseract） | C |
 | `lib/crawler/kanazawa_events_scraper.py` | 金沢市イベント情報の取得 | C |
 | `data/csv/*.csv` | データ班のマスタ・トランザクション（7ファイル） | B |
+| `data/raw/<種類>/<日付>.csv` | 毎朝集めた生データ（天気・イベント・競合チラシ・特売商品） | 自動収集 |
 | `scripts/create_csv.py` `scripts/create_transactions.py` | 上のCSVを作るスクリプト | B |
 | `scripts/analysis_views.sql` | 分析ビュー3本の定義 | B |
 | `scripts/build_db.py` | 統合DBを手元で作る／作り直す | 統合 |
+| `scripts/collect.py` | 外部データを集めて `data/raw` に書き出す（毎朝 Actions が実行） | 統合 |
+| `scripts/gcp_setup.py` | BigQuery のデータセット・外部テーブル・ビューを作り、データ班のCSVを入れる | 統合 |
+| `Dockerfile` / `requirements-collect.txt` | 毎朝の収集を Cloud Run ジョブで動かすコンテナ | 統合 |
+| `docs/gcp.md` | GCP で動かす手順 | 統合 |
+| `.github/workflows/collect.yml` | GitHub Actions で集めてコミットする（GCPを使わない版。今は手動実行のみ） | 統合 |
 | `requirements.txt` / `packages.txt` | Pythonライブラリ／OSのパッケージ（OCR用） | 統合 |
 | `.streamlit/config.toml` | 画面の配色テーマ | A |
 
@@ -121,7 +184,8 @@ python scripts/build_db.py --all     # data/csv/*.csv から全部作り直す�
 - DBファイルは GitHub に上げません（`.gitignore` 済み）。Cloud 上でも初回アクセス時に自動生成されます。
 - チラシのOCRに必要な Tesseract は `packages.txt` で自動的に入ります。
 - Cloud はしばらくアクセスが無いと停止し、再開時にDBを作り直します（同じCSVからは毎回同じ内容になります）。
-  そのときクローラーの保存ぶん（`crawl_*`）は消えますが、「競合・地域情報」を開けば取り直します。
+  外部データの履歴（`crawl_*`）も、GitHub に上がっている `data/raw` から作り直されるので消えません。
+- 毎朝の自動収集のコミットで、Cloud 上のアプリも最新のコードとデータに更新されます。
 - APIキーを使う場合は Cloud の「Secrets」に設定し、`.streamlit/secrets.toml` は **GitHub に上げない**でください。
 
 手元でOCRを使うには、別途 Tesseract 本体のインストールが必要です

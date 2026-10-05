@@ -14,11 +14,13 @@
 """
 from __future__ import annotations
 
+import logging
 import sqlite3
 
 import pandas as pd
 import streamlit as st
 
+from lib import gcp
 from lib.paths import APP_DIR, DATA_DIR, DUMMY_DB, REAL_DB, resolve_db_path  # noqa: F401
 
 
@@ -448,24 +450,40 @@ def db_meta() -> dict[str, str]:
 
 # --------------------------------------------------------------------------
 # ロス分析（データ班の分析ビュー。定義は scripts/analysis_views.sql）
+#   GCPの設定があれば BigQuery（scripts/gcp_setup.py が作ったもの）から読む。
+#   BigQuery に届かないときは、手元の SQLite に切り替えて画面を出し続ける。
 # --------------------------------------------------------------------------
+@st.cache_data(ttl=3600, show_spinner=False)
+def _bq(sql: str) -> pd.DataFrame:
+    return gcp.query(sql)
+
+
+def loss_q(sql: str) -> pd.DataFrame:
+    if gcp.enabled():
+        try:
+            return _bq(sql)
+        except Exception as e:  # noqa: BLE001
+            logging.getLogger(__name__).warning("BigQuery に届かないため SQLite を使います: %s", e)
+    return q(sql)
+
+
 @st.cache_data(show_spinner=False)
 def loss_period() -> tuple[str, str]:
     """データ班のデータが入っている期間。"""
-    df = q("SELECT MIN(sales_date) a, MAX(sales_date) b FROM T_SALES")
+    df = loss_q("SELECT MIN(sales_date) a, MAX(sales_date) b FROM T_SALES")
     return df.a[0], df.b[0]
 
 
 def get_loss_summary() -> pd.DataFrame:
     """店舗別の3大ロス（廃棄・値引・機会ロス）集計。"""
-    return q("SELECT * FROM V_STORE_LOSS_SUMMARY")
+    return loss_q("SELECT * FROM V_STORE_LOSS_SUMMARY")
 
 
 def get_weather_hypothesis() -> pd.DataFrame:
     """気温急変日（前日差 −2.5℃以下）の発注と、その結果。"""
-    return q("SELECT * FROM V_WEATHER_HYPOTHESIS_CHECK")
+    return loss_q("SELECT * FROM V_WEATHER_HYPOTHESIS_CHECK")
 
 
 def get_discount_candidates() -> pd.DataFrame:
     """夕方の見切り推奨候補（日持ち2日以内の商品）。"""
-    return q("SELECT * FROM V_EVENING_DISCOUNT_CANDIDATES")
+    return loss_q("SELECT * FROM V_EVENING_DISCOUNT_CANDIDATES")
