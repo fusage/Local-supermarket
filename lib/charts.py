@@ -162,66 +162,66 @@ def diverging_bar(df: pd.DataFrame, label: str, value: str, height: int = 320,
     return fig
 
 
-def grouped_bar(df: pd.DataFrame, x: str, groups: list[tuple[str, str]],
-                height: int = 320, unit: str = "億円") -> go.Figure:
-    """複数系列の縦棒（部門別の今年・前年など）。金額は既定で億円に換算する。"""
-    div, fmt = (1e8, ",.2f") if unit == "億円" else ((1e4, ",.0f") if unit == "万円" else (1, ",.0f"))
-    fig = go.Figure()
-    for i, (col, name) in enumerate(groups):
-        color = REFERENCE if name.startswith("前年") else SERIES[i % len(SERIES)]
-        fig.add_trace(go.Bar(
-            x=df[x], y=df[col] / div, name=name,
-            marker=dict(color=color, cornerradius=4, line=dict(width=2, color=SURFACE)),
-            hovertemplate="%{x}　" + name + f" %{{y:{fmt}}}{unit}<extra></extra>",
-        ))
-    fig = _base(fig, height)
-    fig.update_layout(barmode="group", bargap=0.25, bargroupgap=0.08)
-    fig.update_yaxes(tickformat=fmt, ticksuffix=f" {unit}")
-    return fig
+#def grouped_bar(df: pd.DataFrame, x: str, groups: list[tuple[str, str]],
+#                height: int = 320, unit: str = "億円") -> go.Figure:
+#    """複数系列の縦棒（部門別の今年・前年など）。金額は既定で億円に換算する。"""
+#    div, fmt = (1e8, ",.2f") if unit == "億円" else ((1e4, ",.0f") if unit == "万円" else (1, ",.0f"))
+#    fig = go.Figure()
+#    for i, (col, name) in enumerate(groups):
+#        color = REFERENCE if name.startswith("前年") else SERIES[i % len(SERIES)]
+#        fig.add_trace(go.Bar(
+#            x=df[x], y=df[col] / div, name=name,
+#            marker=dict(color=color, cornerradius=4, line=dict(width=2, color=SURFACE)),
+#            hovertemplate="%{x}　" + name + f" %{{y:{fmt}}}{unit}<extra></extra>",
+#        ))
+#    fig = _base(fig, height)
+#    fig.update_layout(barmode="group", bargap=0.25, bargroupgap=0.08)
+#    fig.update_yaxes(tickformat=fmt, ticksuffix=f" {unit}")
+#    return fig
 
 
-def class_bar(df: pd.DataFrame, label: str, value: str, cls: str,
-              height: int = 360, unit: str = "億円") -> go.Figure:
-    """A/B/Cなど分類ごとに色を変える横棒（ABC分析）。"""
-    div, fmt = (1e8, ",.2f") if unit == "億円" else ((1e4, ",.0f") if unit == "万円" else (1, ",.0f"))
-    order = ["A", "B", "C"]
-    d = df.sort_values(value)
-    fig = go.Figure()
-    for i, c in enumerate(order):
-        sub = d[d[cls].astype(str) == c]
-        if sub.empty:
-            continue
-        fig.add_trace(go.Bar(
-            x=sub[value] / div, y=sub[label], orientation="h", name=f"{c}ランク",
-            marker=dict(color=SERIES[i], cornerradius=4),
-            hovertemplate=f"%{{y}}　%{{x:{fmt}}}{unit}<extra></extra>",
-        ))
-    fig = _base(fig, height)
-    fig.update_layout(barmode="stack")
-    fig.update_xaxes(showgrid=True, gridcolor=GRID, linecolor="rgba(0,0,0,0)",
-                     tickformat=fmt, ticksuffix=f" {unit}")
-    # ランクごとに系列を分けているため、明示的に値の大きい順（上）に並べ替える
-    fig.update_yaxes(showgrid=False, tickfont=dict(color=INK, size=11),
-                     categoryorder="total ascending")
-    return fig
+#def class_bar(df: pd.DataFrame, label: str, value: str, cls: str,
+#              height: int = 360, unit: str = "億円") -> go.Figure:
+#    """A/B/Cなど分類ごとに色を変える横棒（ABC分析）。"""
+#    div, fmt = (1e8, ",.2f") if unit == "億円" else ((1e4, ",.0f") if unit == "万円" else (1, ",.0f"))
+#    order = ["A", "B", "C"]
+#    d = df.sort_values(value)
+#    fig = go.Figure()
+#    for i, c in enumerate(order):
+#        sub = d[d[cls].astype(str) == c]
+#        if sub.empty:
+#            continue
+#        fig.add_trace(go.Bar(
+#            x=sub[value] / div, y=sub[label], orientation="h", name=f"{c}ランク",
+#            marker=dict(color=SERIES[i], cornerradius=4),
+#            hovertemplate=f"%{{y}}　%{{x:{fmt}}}{unit}<extra></extra>",
+#        ))
+#    fig = _base(fig, height)
+#    fig.update_layout(barmode="stack")
+#    fig.update_xaxes(showgrid=True, gridcolor=GRID, linecolor="rgba(0,0,0,0)",
+#                     tickformat=fmt, ticksuffix=f" {unit}")
+#    # ランクごとに系列を分けているため、明示的に値の大きい順（上）に並べ替える
+#    fig.update_yaxes(showgrid=False, tickfont=dict(color=INK, size=11),
+#                     categoryorder="total ascending")
+#    return fig
 
 
-def multi_lines(df: pd.DataFrame, x: str, y: str, color: str, height: int = 320,
-                yfmt: str = ",.1f") -> go.Figure:
-    """系列が複数ある折れ線（部門別の推移など）。系列は最大6つまで。"""
-    fig = go.Figure()
-    names = list(dict.fromkeys(df[color].tolist()))[:6]
-    for i, name in enumerate(names):
-        sub = df[df[color] == name]
-        fig.add_trace(go.Scatter(
-            x=sub[x], y=sub[y], name=str(name), mode="lines+markers",
-            line=dict(color=SERIES[i % len(SERIES)], width=2),
-            marker=dict(size=8, color=SERIES[i % len(SERIES)]),
-            hovertemplate="%{x}　" + str(name) + " %{y:" + yfmt + "}<extra></extra>",
-        ))
-    fig = _base(fig, height)
-    fig.update_layout(hovermode="x unified")
-    return fig
+#def multi_lines(df: pd.DataFrame, x: str, y: str, color: str, height: int = 320,
+#                yfmt: str = ",.1f") -> go.Figure:
+#    """系列が複数ある折れ線（部門別の推移など）。系列は最大6つまで。"""
+#    fig = go.Figure()
+#    names = list(dict.fromkeys(df[color].tolist()))[:6]
+#    for i, name in enumerate(names):
+#        sub = df[df[color] == name]
+#        fig.add_trace(go.Scatter(
+#            x=sub[x], y=sub[y], name=str(name), mode="lines+markers",
+#            line=dict(color=SERIES[i % len(SERIES)], width=2),
+#            marker=dict(size=8, color=SERIES[i % len(SERIES)]),
+#            hovertemplate="%{x}　" + str(name) + " %{y:" + yfmt + "}<extra></extra>",
+#        ))
+#    fig = _base(fig, height)
+#    fig.update_layout(hovermode="x unified")
+#    return fig
 
 
 def daily_line(df: pd.DataFrame, x: str, y: str, height: int = 260,

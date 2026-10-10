@@ -169,41 +169,41 @@ def monthly_trend(start: str, end: str, stores: tuple = (), depts: tuple = ()) -
 
 
 @st.cache_data(show_spinner=False)
-def by_store(start: str, end: str, depts: tuple = ()) -> pd.DataFrame:
-    """店舗別の売上・粗利率・前年比。"""
-    w, p = scope("s.sales_date", start, end, (), depts)
-    cur = q(
-        f"SELECT st.store_id, st.store_name, SUM(s.amount) amount, SUM(s.gross_profit) gp "
-        f"FROM sales s JOIN products p USING(product_id) JOIN stores st USING(store_id) "
-        f"WHERE {w} GROUP BY 1,2", tuple(p))
-    w2, p2 = scope("s.sales_date", shift_year(start), shift_year(end), (), depts)
-    prev = q(
-        f"SELECT st.store_id, SUM(s.amount) prev_amount "
-        f"FROM sales s JOIN products p USING(product_id) JOIN stores st USING(store_id) "
-        f"WHERE {w2} GROUP BY 1", tuple(p2))
-    out = cur.merge(prev, on="store_id", how="left")
-    out["gp_rate"] = out["gp"] / out["amount"] * 100
-    out["yoy"] = (out["amount"] / out["prev_amount"] - 1) * 100
-    return out.sort_values("amount", ascending=False).reset_index(drop=True)
+#def by_store(start: str, end: str, depts: tuple = ()) -> pd.DataFrame:
+#    """店舗別の売上・粗利率・前年比。"""
+#    w, p = scope("s.sales_date", start, end, (), depts)
+#    cur = q(
+#        f"SELECT st.store_id, st.store_name, SUM(s.amount) amount, SUM(s.gross_profit) gp "
+#        f"FROM sales s JOIN products p USING(product_id) JOIN stores st USING(store_id) "
+#        f"WHERE {w} GROUP BY 1,2", tuple(p))
+#    w2, p2 = scope("s.sales_date", shift_year(start), shift_year(end), (), depts)
+#    prev = q(
+#        f"SELECT st.store_id, SUM(s.amount) prev_amount "
+#        f"FROM sales s JOIN products p USING(product_id) JOIN stores st USING(store_id) "
+#        f"WHERE {w2} GROUP BY 1", tuple(p2))
+#    out = cur.merge(prev, on="store_id", how="left")
+#    out["gp_rate"] = out["gp"] / out["amount"] * 100
+#    out["yoy"] = (out["amount"] / out["prev_amount"] - 1) * 100
+#    return out.sort_values("amount", ascending=False).reset_index(drop=True)
 
 
 @st.cache_data(show_spinner=False)
-def by_dept(start: str, end: str, stores: tuple = ()) -> pd.DataFrame:
-    """部門別の売上構成と粗利率・前年比。"""
-    w, p = scope("s.sales_date", start, end, stores)
-    cur = q(
-        f"SELECT d.dept_id, d.dept_name, SUM(s.amount) amount, SUM(s.gross_profit) gp "
-        f"FROM sales s JOIN products p USING(product_id) JOIN departments d USING(dept_id) "
-        f"WHERE {w} GROUP BY 1,2", tuple(p))
-    w2, p2 = scope("s.sales_date", shift_year(start), shift_year(end), stores)
-    prev = q(
-        f"SELECT p.dept_id, SUM(s.amount) prev_amount "
-        f"FROM sales s JOIN products p USING(product_id) WHERE {w2} GROUP BY 1", tuple(p2))
-    out = cur.merge(prev, on="dept_id", how="left")
-    out["share"] = out["amount"] / out["amount"].sum() * 100
-    out["gp_rate"] = out["gp"] / out["amount"] * 100
-    out["yoy"] = (out["amount"] / out["prev_amount"] - 1) * 100
-    return out.sort_values("amount", ascending=False).reset_index(drop=True)
+#def by_dept(start: str, end: str, stores: tuple = ()) -> pd.DataFrame:
+#    """部門別の売上構成と粗利率・前年比。"""
+#    w, p = scope("s.sales_date", start, end, stores)
+#    cur = q(
+#        f"SELECT d.dept_id, d.dept_name, SUM(s.amount) amount, SUM(s.gross_profit) gp "
+#        f"FROM sales s JOIN products p USING(product_id) JOIN departments d USING(dept_id) "
+#        f"WHERE {w} GROUP BY 1,2", tuple(p))
+#    w2, p2 = scope("s.sales_date", shift_year(start), shift_year(end), stores)
+#    prev = q(
+#        f"SELECT p.dept_id, SUM(s.amount) prev_amount "
+#        f"FROM sales s JOIN products p USING(product_id) WHERE {w2} GROUP BY 1", tuple(p2))
+#    out = cur.merge(prev, on="dept_id", how="left")
+#    out["share"] = out["amount"] / out["amount"].sum() * 100
+#    out["gp_rate"] = out["gp"] / out["amount"] * 100
+#    out["yoy"] = (out["amount"] / out["prev_amount"] - 1) * 100
+#    return out.sort_values("amount", ascending=False).reset_index(drop=True)
 
 
 @st.cache_data(show_spinner=False)
@@ -253,25 +253,25 @@ def product_perf(start: str, end: str, stores: tuple = (), depts: tuple = ()) ->
     return out.sort_values("amount", ascending=False).reset_index(drop=True)
 
 
-def abc_analysis(perf: pd.DataFrame, key: str = "amount") -> pd.DataFrame:
-    """売上（または粗利）の多い順にA/B/Cへ分類する。A=上位70%、B=〜90%、C=残り。"""
-    df = perf.sort_values(key, ascending=False).reset_index(drop=True).copy()
-    total = df[key].sum()
-    df["cum_share"] = df[key].cumsum() / total * 100 if total else 0
-    df["rank_class"] = pd.cut(df["cum_share"], [-1, 70, 90, 1000], labels=["A", "B", "C"])
-    return df
+#def abc_analysis(perf: pd.DataFrame, key: str = "amount") -> pd.DataFrame:
+#    """売上（または粗利）の多い順にA/B/Cへ分類する。A=上位70%、B=〜90%、C=残り。"""
+#    df = perf.sort_values(key, ascending=False).reset_index(drop=True).copy()
+#    total = df[key].sum()
+#    df["cum_share"] = df[key].cumsum() / total * 100 if total else 0
+#    df["rank_class"] = pd.cut(df["cum_share"], [-1, 70, 90, 1000], labels=["A", "B", "C"])
+#    return df
 
 
 @st.cache_data(show_spinner=False)
-def cost_trend(start: str, end: str, stores: tuple = (), depts: tuple = ()) -> pd.DataFrame:
-    """月次の平均仕入単価（標準原価を1.00とした指数）。"""
-    w, p = scope("pu.purchase_date", start, end, stores, depts)
-    return q(
-        f"SELECT substr(pu.purchase_date,1,7) ym, d.dept_name, "
-        f"SUM(pu.unit_cost*pu.purchase_qty)/SUM(pu.purchase_qty) avg_cost, "
-        f"SUM(p.std_cost*pu.purchase_qty)/SUM(pu.purchase_qty) std_cost "
-        f"FROM purchases pu JOIN products p USING(product_id) "
-        f"JOIN departments d USING(dept_id) WHERE {w} GROUP BY 1,2 ORDER BY 1", tuple(p))
+#def cost_trend(start: str, end: str, stores: tuple = (), depts: tuple = ()) -> pd.DataFrame:
+#    """月次の平均仕入単価（標準原価を1.00とした指数）。"""
+#    w, p = scope("pu.purchase_date", start, end, stores, depts)
+#    return q(
+#        f"SELECT substr(pu.purchase_date,1,7) ym, d.dept_name, "
+#        f"SUM(pu.unit_cost*pu.purchase_qty)/SUM(pu.purchase_qty) avg_cost, "
+#        f"SUM(p.std_cost*pu.purchase_qty)/SUM(pu.purchase_qty) std_cost "
+#        f"FROM purchases pu JOIN products p USING(product_id) "
+#        f"JOIN departments d USING(dept_id) WHERE {w} GROUP BY 1,2 ORDER BY 1", tuple(p))
 
 
 @st.cache_data(show_spinner=False)
@@ -342,30 +342,30 @@ def stockout_detail(start: str, end: str, store_id: int, dept_id: int) -> pd.Dat
 
 
 @st.cache_data(show_spinner=False)
-def reorder_suggestion(as_of: str, store_id: int, dept_id: int) -> pd.DataFrame:
-    """発注数の目安＝過去4週の同じ曜日の平均販売数 − 現在庫。
-
-    ※ ごく単純な計算です。需要予測モデルは今回のスコープ外（要件定義 D-05）。
-    """
-    dow = pd.Timestamp(as_of).dayofweek
-    since = (pd.Timestamp(as_of) - pd.Timedelta(days=28)).strftime("%Y-%m-%d")
-    hist = q(
-        "SELECT p.product_id, p.product_name, s.sales_date, s.qty "
-        "FROM sales s JOIN products p USING(product_id) "
-        "WHERE s.sales_date BETWEEN ? AND ? AND s.store_id=? AND p.dept_id=?",
-        (since, as_of, store_id, dept_id))
-    if hist.empty:
-        return hist
-    hist = hist.copy()
-    hist["dow"] = pd.to_datetime(hist["sales_date"]).dt.dayofweek
-    same = hist[hist["dow"] == dow]
-    base = (same.groupby(["product_id", "product_name"], as_index=False)["qty"].mean()
-                .rename(columns={"qty": "avg_qty"}))
-    stock = q(LATEST_STOCK_SQL, (store_id, as_of, store_id))
-    out = base.merge(stock, on="product_id", how="left")
-    out["stock_qty"] = out["stock_qty"].fillna(0)
-    out["suggest"] = (out["avg_qty"] * 1.1 - out["stock_qty"]).round().clip(lower=0)
-    return out.sort_values("suggest", ascending=False).reset_index(drop=True)
+#def reorder_suggestion(as_of: str, store_id: int, dept_id: int) -> pd.DataFrame:
+#    """発注数の目安＝過去4週の同じ曜日の平均販売数 − 現在庫。
+#
+#    ※ ごく単純な計算です。需要予測モデルは今回のスコープ外（要件定義 D-05）。
+#    """
+#    dow = pd.Timestamp(as_of).dayofweek
+#    since = (pd.Timestamp(as_of) - pd.Timedelta(days=28)).strftime("%Y-%m-%d")
+#    hist = q(
+#        "SELECT p.product_id, p.product_name, s.sales_date, s.qty "
+#        "FROM sales s JOIN products p USING(product_id) "
+#        "WHERE s.sales_date BETWEEN ? AND ? AND s.store_id=? AND p.dept_id=?",
+#        (since, as_of, store_id, dept_id))
+#    if hist.empty:
+#        return hist
+#    hist = hist.copy()
+#    hist["dow"] = pd.to_datetime(hist["sales_date"]).dt.dayofweek
+#    same = hist[hist["dow"] == dow]
+#    base = (same.groupby(["product_id", "product_name"], as_index=False)["qty"].mean()
+#                .rename(columns={"qty": "avg_qty"}))
+#    stock = q(LATEST_STOCK_SQL, (store_id, as_of, store_id))
+#    out = base.merge(stock, on="product_id", how="left")
+#    out["stock_qty"] = out["stock_qty"].fillna(0)
+#    out["suggest"] = (out["avg_qty"] * 1.1 - out["stock_qty"]).round().clip(lower=0)
+#    return out.sort_values("suggest", ascending=False).reset_index(drop=True)
 
 
 @st.cache_data(show_spinner=False)
@@ -415,21 +415,21 @@ def product_sales_trend(product_id: int, start: str, end: str, stores: tuple = (
 
 
 @st.cache_data(show_spinner=False)
-def knowledge(keyword: str = "", dept_id: int | None = None) -> pd.DataFrame:
-    w, p = [], []
-    if keyword:
-        like = f"%{keyword}%"
-        w.append("(k.title LIKE ? OR k.body LIKE ? OR k.tags LIKE ?)")
-        p += [like, like, like]
-    if dept_id:
-        w.append("k.dept_id=?")
-        p.append(dept_id)
-    where = ("WHERE " + " AND ".join(w)) if w else ""
-    return q(
-        f"SELECT k.knowledge_id, k.title, k.body, d.dept_name, k.tags, k.author, "
-        f"k.created_at, k.helpful_count FROM knowledge k "
-        f"LEFT JOIN departments d USING(dept_id) {where} "
-        f"ORDER BY k.helpful_count DESC", tuple(p))
+#def knowledge(keyword: str = "", dept_id: int | None = None) -> pd.DataFrame:
+#    w, p = [], []
+#    if keyword:
+#        like = f"%{keyword}%"
+#        w.append("(k.title LIKE ? OR k.body LIKE ? OR k.tags LIKE ?)")
+#        p += [like, like, like]
+#    if dept_id:
+#        w.append("k.dept_id=?")
+#        p.append(dept_id)
+#    where = ("WHERE " + " AND ".join(w)) if w else ""
+#    return q(
+#        f"SELECT k.knowledge_id, k.title, k.body, d.dept_name, k.tags, k.author, "
+#        f"k.created_at, k.helpful_count FROM knowledge k "
+#        f"LEFT JOIN departments d USING(dept_id) {where} "
+#        f"ORDER BY k.helpful_count DESC", tuple(p))
 
 
 @st.cache_data(show_spinner=False)
@@ -453,35 +453,21 @@ def db_meta() -> dict[str, str]:
 #   GCPの設定があれば BigQuery（scripts/gcp_setup.py が作ったもの）から読む。
 #   BigQuery に届かないときは、手元の SQLite に切り替えて画面を出し続ける。
 # --------------------------------------------------------------------------
-@st.cache_data(ttl=3600, show_spinner=False)
-def _bq(sql: str) -> pd.DataFrame:
-    return gcp.query(sql)
+#@st.cache_data(show_spinner=False)
+#def loss_period() -> tuple[str, str]:
+#    """データ班のデータが入っている期間。"""
+#    df = q("SELECT MIN(sales_date) a, MAX(sales_date) b FROM T_SALES")
+#    return df.a[0], df.b[0]
 
 
-def loss_q(sql: str) -> pd.DataFrame:
-    if gcp.enabled():
-        try:
-            return _bq(sql)
-        except Exception as e:  # noqa: BLE001
-            logging.getLogger(__name__).warning("BigQuery に届かないため SQLite を使います: %s", e)
-    return q(sql)
+#def get_loss_summary() -> pd.DataFrame:
+#    """店舗別の3大ロス（廃棄・値引・機会ロス）集計。"""
+#    return q("SELECT * FROM V_STORE_LOSS_SUMMARY")
 
 
-@st.cache_data(show_spinner=False)
-def loss_period() -> tuple[str, str]:
-    """データ班のデータが入っている期間。"""
-    df = loss_q("SELECT MIN(sales_date) a, MAX(sales_date) b FROM T_SALES")
-    return df.a[0], df.b[0]
-
-
-def get_loss_summary() -> pd.DataFrame:
-    """店舗別の3大ロス（廃棄・値引・機会ロス）集計。"""
-    return loss_q("SELECT * FROM V_STORE_LOSS_SUMMARY")
-
-
-def get_weather_hypothesis() -> pd.DataFrame:
-    """気温急変日（前日差 −2.5℃以下）の発注と、その結果。"""
-    return loss_q("SELECT * FROM V_WEATHER_HYPOTHESIS_CHECK")
+#def get_weather_hypothesis() -> pd.DataFrame:
+#    """気温急変日（前日差 −2.5℃以下）の発注と、その結果。"""
+#    return q("SELECT * FROM V_WEATHER_HYPOTHESIS_CHECK")
 
 
 def get_discount_candidates() -> pd.DataFrame:
