@@ -8,7 +8,7 @@
 
 3人の成果物を1つにまとめた統合版です。画面はサイドバー上部のメニューで切り替えます。
   統合ダッシュボード … このファイル（経営／バイヤー／部門担当）
-  ロス分析           … views/loss.py   （データ班のテーブルと分析ビュー）
+  （ロス分析 views/loss.py は第8回打合せで画面から外した。ファイルは残している）
   競合・地域情報     … views/market.py （クローラー）
 
 起動方法:  streamlit run app.py
@@ -23,19 +23,7 @@ import streamlit as st
 
 from lib import charts as ch
 from lib import crawl_store, db, integrate
-from views import loss, market
-
-# --- 他メンバーのモジュールがあれば使う（無くても動く） --------------------
-try:                                   # tomさん担当：自然言語→SQLの検索エンジン
-    from lib import search_engine      # 期待する関数: search(query:str) -> pandas.DataFrame | dict
-except Exception:
-    search_engine = None
-
-try:                                   # 生成AIによる分析コメント（任意）
-    from lib import ai_comment         # 期待する関数: comment(context:dict) -> str
-except Exception:
-    ai_comment = None
-
+from views import market
 
 st.set_page_config(
     page_title="統合ダッシュボード｜地方独立系スーパー",
@@ -86,14 +74,14 @@ def ensure_database() -> str:
 
 
 # ==========================================================================
-# サイドバー（共通の絞り込み）
+# サイドバー（共通の絞り込み）　
 # ==========================================================================
 def sidebar(kind: str) -> dict:
     st.sidebar.title("🛒 統合ダッシュボード")
 
     meta = db.db_meta()
     if kind == "real" and meta.get("real_from"):
-        st.sidebar.success(f"データ班のデータ（サンフジ{meta['stores']}店舗）で動作中", icon="✅")
+        st.sidebar.success(f"データ班のデータ（サンフジ中央店）で動作中", icon="✅")
         st.sidebar.caption(
             f"{meta['real_from']} 〜 {meta['real_to']} のデータ班{meta['real_products']}商品は、"
             "データ班のデータそのままです。それ以外の期間、追加した"
@@ -111,45 +99,30 @@ def sidebar(kind: str) -> dict:
     dmin_d = pd.Timestamp(dmin).date()
 
     st.sidebar.subheader("期間")
-    preset = st.sidebar.selectbox(
-        "よく使う期間", ["直近12か月", "直近3か月", "直近1か月", "今年度（4月〜）", "カスタム"],
-        index=0 if role != "部門担当" else 2,
-    )
-    if preset == "直近12か月":
-        start, end = dmax_d - timedelta(days=364), dmax_d
-    elif preset == "直近3か月":
-        start, end = dmax_d - timedelta(days=89), dmax_d
-    elif preset == "直近1か月":
-        start, end = dmax_d - timedelta(days=29), dmax_d
-    elif preset == "今年度（4月〜）":
-        fy = dmax_d.year if dmax_d.month >= 4 else dmax_d.year - 1
-        start, end = date(fy, 4, 1), dmax_d
+
+    default_days = 29 if role == "部門担当" else 364
+    picked = st.sidebar.date_input(
+        "期間を指定", (max(dmin_d, dmax_d - timedelta(days=default_days)), dmax_d),
+        min_value=dmin_d, max_value=dmax_d)
+    # 開始日だけ選んだ状態（終了日を選ぶ前）でも落ちないようにする
+    if isinstance(picked, (list, tuple)):
+        start = picked[0]
+        end = picked[1] if len(picked) > 1 else dmax_d
     else:
-        picked = st.sidebar.date_input(
-            "期間を指定", (dmax_d - timedelta(days=89), dmax_d),
-            min_value=dmin_d, max_value=dmax_d)
-        # 開始日だけ選んだ状態（終了日を選ぶ前）でも落ちないようにする
-        if isinstance(picked, (list, tuple)):
-            start = picked[0]
-            end = picked[1] if len(picked) > 1 else dmax_d
-        else:
-            start, end = picked, dmax_d
+        start, end = picked, dmax_d
     st.sidebar.caption(f"{start} 〜 {end}")
 
     m = db.masters()
     stores, depts = m["stores"], m["departments"]
 
     st.sidebar.subheader("絞り込み")
+    store_ids = (int(stores["store_id"].iloc[0]),)
+    st.sidebar.caption(f"対象店舗：{stores['store_name'].iloc[0]}")
     if role == "部門担当":
-        store_name = st.sidebar.selectbox("店舗", stores["store_name"])
         dept_name = st.sidebar.selectbox("部門", depts["dept_name"])
-        store_ids = (int(stores.loc[stores["store_name"] == store_name, "store_id"].iloc[0]),)
         dept_ids = (int(depts.loc[depts["dept_name"] == dept_name, "dept_id"].iloc[0]),)
     else:
-        sel_s = st.sidebar.multiselect("店舗（未選択＝全店）", stores["store_name"])
         sel_d = st.sidebar.multiselect("部門（未選択＝全部門）", depts["dept_name"])
-        store_ids = tuple(int(x) for x in
-                          stores.loc[stores["store_name"].isin(sel_s), "store_id"])
         dept_ids = tuple(int(x) for x in
                          depts.loc[depts["dept_name"].isin(sel_d), "dept_id"])
 
@@ -173,33 +146,16 @@ def sidebar(kind: str) -> dict:
 # 横断検索（要件定義 C-03）
 # ==========================================================================
 def search_panel(f: dict) -> None:
-    col1, col2 = st.columns([5, 1])
-    with col1:
-        query = st.text_input(
-            "検索", placeholder="例）バナナ　／　牛乳 在庫　／　24年度 売上",
-            label_visibility="collapsed", key="search_query")
-    with col2:
-        clear = st.button("クリア", width="stretch")
-    if clear:
-        st.session_state["search_query"] = ""
-        st.rerun()
+
+    query = st.text_input(
+        "検索", placeholder="例）バナナ　／　牛乳　／　野菜",
+        label_visibility="collapsed", key="search_query")
     if not query:
         return
 
     with st.container(border=True):
         st.markdown(f"**「{query}」の検索結果**")
 
-        # tomさん担当の検索エンジンがあればそちらを使う
-        if search_engine is not None and hasattr(search_engine, "search"):
-            try:
-                result = search_engine.search(query)
-                if isinstance(result, pd.DataFrame):
-                    st.dataframe(result, width="stretch")
-                else:
-                    st.write(result)
-                return
-            except Exception as e:      # 検索側のエラーで画面全体を落とさない
-                st.info(f"検索エンジンでエラーが出たため、簡易検索に切り替えました（{e}）")
 
         # --- 簡易検索（商品名・読み仮名・部門・カテゴリの部分一致） ---------
         hits = db.find_products(query)
@@ -226,61 +182,11 @@ def search_panel(f: dict) -> None:
 
 
 # ==========================================================================
-# 自動コメント（AI連携の差し込み口）
-# ==========================================================================
-def auto_comment(context: dict) -> str:
-    """数値から要点を文章にする。
-
-    いまはルールベース。生成AIを使う場合は lib/ai_comment.py に
-    comment(context: dict) -> str を用意すれば、そちらが呼ばれます（要件定義 C-05）。
-    """
-    if ai_comment is not None and hasattr(ai_comment, "comment"):
-        try:
-            return ai_comment.comment(context)
-        except Exception as e:
-            return f"（AIコメントの生成に失敗したため、簡易コメントを表示します：{e}）"
-
-    k = context["kpi"]
-    lines = []
-    yoy = (k["amount"] / k["prev_amount"] - 1) * 100 if k["prev_amount"] else 0
-    bud = (k["amount"] / k["budget_amount"] - 1) * 100 if k["budget_amount"] else 0
-    lines.append(
-        f"- 売上は {ch.yen(k['amount'])}（前年比 {yoy:+.1f}%、予算比 {bud:+.1f}%）、"
-        f"粗利率は {k['gp_rate']:.1f}% です。"
-    )
-    st_df = context.get("by_store")
-    if st_df is not None and not st_df.empty:
-        worst = st_df.sort_values("yoy").iloc[0]
-        best = st_df.sort_values("yoy").iloc[-1]
-        lines.append(
-            f"- 前年比がいちばん悪いのは **{worst['store_name']}**（{worst['yoy']:+.1f}%）、"
-            f"いちばん良いのは {best['store_name']}（{best['yoy']:+.1f}%）です。"
-        )
-    dp = context.get("by_dept")
-    if dp is not None and not dp.empty:
-        w = dp.sort_values("yoy").iloc[0]
-        lines.append(
-            f"- 部門では **{w['dept_name']}** が前年比 {w['yoy']:+.1f}% と弱く、"
-            f"粗利率は {w['gp_rate']:.1f}%、売上構成比は {w['share']:.1f}% です。"
-        )
-    ls = context.get("loss")
-    if ls is not None and not ls.empty:
-        t = ls.iloc[0]
-        lines.append(
-            f"- ロス率がいちばん高いのは **{t['store_name']}の{t['dept_name']}**"
-            f"（{t['loss_rate']:.1f}%、廃棄 {ch.yen(t['waste'])}）です。"
-            "　作業手順と値引きのタイミングを確認してください。"
-        )
-    lines.append("- ※ 最終的な判断は人が行ってください。この文章は数値から機械的に作ったものです。")
-    return "\n".join(lines)
-
-
-# ==========================================================================
 # ① 経営ダッシュボード
 # ==========================================================================
 def page_management(f: dict) -> None:
     st.subheader("経営ダッシュボード")
-    st.caption("全社の業績をつかみ、手を打つべき店舗・部門を見つける画面です。")
+    st.caption("店舗の業績をつかみ、手を打つべき部門を見つける画面です。")
 
     k = db.kpi(f["start"], f["end"], f["stores"], f["depts"])
     yoy = (k["amount"] / k["prev_amount"] - 1) * 100 if k["prev_amount"] else None
@@ -305,37 +211,7 @@ def page_management(f: dict) -> None:
         ch.trend_lines(tr, "ym", [("amount", "売上"), ("prev_amount", "前年"), ("budget", "予算")]),
         width="stretch")
 
-    left, right = st.columns(2)
-    bs = db.by_store(f["start"], f["end"], f["depts"])
-    with left:
-        st.markdown("##### 店舗別の売上")
-        st.plotly_chart(
-            ch.ranking_bar(bs, "store_name", "amount",
-                           text=[ch.yen(v) for v in bs.sort_values("amount")["amount"]]),
-            width="stretch")
-    with right:
-        st.markdown("##### 店舗別の前年比")
-        st.plotly_chart(ch.diverging_bar(bs, "store_name", "yoy"), width="stretch")
-        st.caption("赤＝前年割れ。まずここから原因を確認します。")
 
-    st.markdown("##### 部門別の状況")
-    bd = db.by_dept(f["start"], f["end"], f["stores"])
-    lc, rc = st.columns([3, 2])
-    with lc:
-        st.plotly_chart(
-            ch.grouped_bar(bd, "dept_name", [("amount", "今年"), ("prev_amount", "前年")]),
-            width="stretch")
-    with rc:
-        st.dataframe(
-            bd[["dept_name", "amount", "share", "gp_rate", "yoy"]],
-            hide_index=True, width="stretch",
-            column_config={
-                "dept_name": "部門",
-                "amount": st.column_config.NumberColumn("売上", format="localized"),
-                "share": st.column_config.NumberColumn("構成比", format="%.1f%%"),
-                "gp_rate": st.column_config.NumberColumn("粗利率", format="%.1f%%"),
-                "yoy": st.column_config.NumberColumn("前年比", format="%+.1f%%"),
-            })
 
     st.markdown("##### ロス・欠品（店舗×部門）")
     ls = db.loss_summary(f["start"], f["end"], f["stores"], f["depts"])
@@ -360,8 +236,7 @@ def page_management(f: dict) -> None:
                 "stockouts": st.column_config.NumberColumn("欠品件数", format="localized"),
             })
 
-    with st.expander("🤖 今月の要点（自動コメント）", expanded=True):
-        st.markdown(auto_comment({"kpi": k, "by_store": bs, "by_dept": bd, "loss": ls}))
+
 
 
 # ==========================================================================
@@ -384,48 +259,9 @@ def page_buyer(f: dict) -> None:
     c[3].metric("前年割れの商品", f"{len(down):,} 品目",
                 f"{len(down)/len(perf)*100:.0f}% が前年割れ", delta_color="off")
 
-    tab1, tab2, tab3 = st.tabs(["商品別の実績", "ABC分析", "競合価格との比較"])
 
-    with tab1:
-        st.dataframe(
-            perf[["product_name", "dept_name", "category", "qty", "amount", "gp_rate", "yoy", "std_price"]],
-            hide_index=True, width="stretch", height=430,
-            column_config={
-                "product_name": "商品名",
-                "dept_name": "部門",
-                "category": "カテゴリ",
-                "qty": st.column_config.NumberColumn("販売数", format="localized"),
-                "amount": st.column_config.NumberColumn("売上", format="localized"),
-                "gp_rate": st.column_config.NumberColumn("粗利率", format="%.1f%%"),
-                "yoy": st.column_config.NumberColumn("前年比", format="%+.1f%%"),
-                "std_price": st.column_config.NumberColumn("標準売価", format="localized"),
-            })
-        st.caption("列名をクリックすると並べ替えできます。")
-
-    with tab2:
-        abc = db.abc_analysis(perf, "amount")
-        counts = abc["rank_class"].value_counts()
-        cc = st.columns(3)
-        for i, r in enumerate(["A", "B", "C"]):
-            cc[i].metric(f"{r}ランク", f"{int(counts.get(r, 0)):,} 品目")
-        top25 = abc.head(25)
-        st.plotly_chart(ch.class_bar(top25, "product_name", "amount", "rank_class", height=520),
-                        width="stretch")
-        st.caption("A＝売上上位70%、B＝〜90%、C＝残り。Cランクは見直しの候補です。")
-        st.dataframe(
-            abc[abc["rank_class"].astype(str) == "C"][
-                ["product_name", "dept_name", "amount", "gp_rate", "yoy", "cum_share"]],
-            hide_index=True, width="stretch",
-            column_config={
-                "product_name": "商品名", "dept_name": "部門",
-                "amount": st.column_config.NumberColumn("売上", format="localized"),
-                "gp_rate": st.column_config.NumberColumn("粗利率", format="%.1f%%"),
-                "yoy": st.column_config.NumberColumn("前年比", format="%+.1f%%"),
-                "cum_share": st.column_config.NumberColumn("累計構成比", format="%.1f%%"),
-            })
-
-    with tab3:
-        competitor_tab(f)
+    st.markdown("##### 競合価格との比較")
+    competitor_tab(f)
 
 
 def crawled_featured_items() -> None:
@@ -486,7 +322,10 @@ def competitor_gap_section(cg: pd.DataFrame) -> None:
             "competitor_name": "競合店", "business_type": "業態",
             "price": st.column_config.NumberColumn("競合価格", format="localized"),
             "fetched_at": "取得日時",
-        })
+        })    
+
+
+
 
 
 # ==========================================================================
@@ -522,26 +361,25 @@ def page_department(f: dict) -> None:
     else:
         st.plotly_chart(ch.daily_line(daily, "sales_date", "amount"), width="stretch")
 
-    tab1, tab2, tab3, tab4 = st.tabs(["発注の目安", "廃棄", "欠品", "在庫"])
-
+    tab1, tab2, tab3, tab4 = st.tabs(["在庫", "廃棄", "欠品", "発注の目安"])
     with tab1:
-        as_of = f["end"]
-        rs = db.reorder_suggestion(as_of, store_id, dept_id)
-        st.caption(
-            f"基準日 {as_of}｜発注の目安 ＝ 過去4週の同じ曜日の平均販売数 × 1.1 − 現在庫"
-            "（かんたんな計算です。需要予測は今回のスコープ外）")
-        if rs.empty:
-            st.info("計算に必要な実績がありません。")
+        inv = db.inventory_status(f["end"], store_id, dept_id)
+        if inv.empty:
+            st.info("在庫データがありません。")
         else:
+            st.caption("在庫日数＝現在庫 ÷ 直近7日の平均販売数。数字が大きいほど在庫を持ちすぎです。")
+            mx = inv["days"].max()
+            mx = 5.0 if pd.isna(mx) else float(max(5.0, mx))
             st.dataframe(
-                rs[["product_name", "avg_qty", "stock_qty", "suggest"]],
-                hide_index=True, width="stretch",
+                inv, hide_index=True, width="stretch",
                 column_config={
                     "product_name": "商品名",
-                    "avg_qty": st.column_config.NumberColumn("同曜日の平均販売数", format="%.1f"),
-                    "stock_qty": st.column_config.NumberColumn("現在庫", format="localized"),
-                    "suggest": st.column_config.NumberColumn("発注の目安", format="localized"),
+                    "stock_qty": st.column_config.NumberColumn("在庫数", format="localized"),
+                    "avg_qty": st.column_config.NumberColumn("平均販売数/日", format="%.1f"),
+                    "days": st.column_config.ProgressColumn(
+                        "在庫日数", format="%.1f日", min_value=0.0, max_value=mx),
                 })
+
 
     with tab2:
         if waste.empty:
@@ -560,53 +398,11 @@ def page_department(f: dict) -> None:
                          })
 
     with tab3:
-        if so.empty:
-            st.info("この期間の欠品はありません。")
-        else:
-            by_slot = so.groupby("time_slot", as_index=False)["cnt"].sum()
-            st.plotly_chart(
-                ch.ranking_bar(by_slot, "time_slot", "cnt", height=240,
-                               color=ch.STATUS["critical"]),
-                width="stretch")
-            st.caption("時間帯別の欠品件数。夕方に多いなら、昼の追加発注や陳列の見直しが効きます。")
-            st.dataframe(so.head(20), hide_index=True, width="stretch",
-                         column_config={"product_name": "商品名", "time_slot": "時間帯",
-                                        "cnt": st.column_config.NumberColumn("件数", format="localized")})
+            st.caption("準備中")
+
 
     with tab4:
-        inv = db.inventory_status(f["end"], store_id, dept_id)
-        if inv.empty:
-            st.info("在庫データがありません。")
-        else:
-            st.caption("在庫日数＝現在庫 ÷ 直近7日の平均販売数。数字が大きいほど在庫を持ちすぎです。")
-            mx = inv["days"].max()
-            mx = 5.0 if pd.isna(mx) else float(max(5.0, mx))
-            st.dataframe(
-                inv, hide_index=True, width="stretch",
-                column_config={
-                    "product_name": "商品名",
-                    "stock_qty": st.column_config.NumberColumn("在庫数", format="localized"),
-                    "avg_qty": st.column_config.NumberColumn("平均販売数/日", format="%.1f"),
-                    "days": st.column_config.ProgressColumn(
-                        "在庫日数", format="%.1f日", min_value=0.0, max_value=mx),
-                })
-
-    st.markdown("##### 売場づくり・対応のナレッジ")
-    kcol1, kcol2 = st.columns([3, 1])
-    with kcol1:
-        kw = st.text_input("ナレッジを検索", placeholder="例）廃棄　欠品　POP",
-                           key="kw_knowledge", label_visibility="collapsed")
-    with kcol2:
-        only_mine = st.checkbox("自部門のみ", value=True)
-    kn = db.knowledge(kw, dept_id=dept_id if only_mine else None)
-    if kn.empty:
-        st.info("該当するナレッジがありません。")
-    else:
-        for _, r in kn.iterrows():
-            with st.container(border=True):
-                st.markdown(f"**{r['title']}**　　`{r['dept_name'] or '共通'}`　👍 {r['helpful_count']}")
-                st.write(r["body"])
-                st.caption(f"{r['author']}　{r['created_at']}　タグ：{r['tags']}")
+            st.caption("準備中")
 
 
 # ==========================================================================
@@ -624,11 +420,18 @@ def page_dashboard() -> None:
         page_department(f)
 
 
+def page_loss_placeholder() -> None:
+    """ロス分析（メニュー項目だけ残す。中身は第8回打合せで外した）。"""
+    st.title("📉 ロス分析")
+    st.info("ロス分析ページは現在準備中です。")
+
+
 def main() -> None:
     ensure_database()
     nav = st.navigation([
         st.Page(page_dashboard, title="統合ダッシュボード", icon="🛒", default=True),
-        st.Page(loss.render, title="ロス分析", icon="📉", url_path="loss"),
+        
+        st.Page(page_loss_placeholder, title="ロス分析", icon="📉", url_path="loss"),
         st.Page(market.render, title="競合・地域情報", icon="📰", url_path="market"),
     ])
     nav.run()
