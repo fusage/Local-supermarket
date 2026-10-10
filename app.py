@@ -24,7 +24,7 @@ import streamlit as st
 
 from lib import charts as ch
 from lib import crawl_store, db, integrate
-from lib import pipeline
+from views import pipeline
 from views import market
 
 st.set_page_config(
