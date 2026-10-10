@@ -11,13 +11,16 @@ from __future__ import annotations
 
 import logging
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Tuple
 
 import pandas as pd
 
 from lib import gcp
 from lib.paths import resolve_db_path
+
+# 日本時間(JST)の定義
+JST = timezone(timedelta(hours=9))
 
 # テーブルごとに、保存する列(store_name と fetched_at はここで付け足す)
 COLUMNS = {
@@ -32,6 +35,11 @@ ORDER_BY = {
     "crawl_featured_items": "sale_date, product_name",
     "crawl_events": "start_date, title",
 }
+
+# FEATURED_MAP・EVENT_MAPの定義（外部ファイルからのインポートの場合は適切な from ... import に変更してください）
+FEATURED_MAP = ["sales", "customers", "inventory"] 
+EVENT_MAP = ["title", "start_date", "end_date"]
+
 FEATURED_COLS = ["store_name", *FEATURED_MAP, "fetched_at"]
 EVENT_COLS = [*EVENT_MAP, "fetched_at"]
 
@@ -54,9 +62,9 @@ def save(table: str, rows: List[dict], store_name: Optional[str] = None) -> None
     where, params = ("WHERE store_name=?", (store_name,)) if store_name else ("", ())
     if store_name:
         cols = ["store_name"] + cols
-    now = datetime.now().isoformat(sep=" ", timespec="seconds")
+    fetched_now = now()
     values = [
-        tuple(store_name if c == "store_name" else now if c == "fetched_at" else r.get(c) for c in cols)
+        tuple(store_name if c == "store_name" else fetched_now if c == "fetched_at" else r.get(c) for c in cols)
         for r in rows
     ]
     con = _connect()
