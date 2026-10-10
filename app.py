@@ -10,6 +10,7 @@
   統合ダッシュボード … このファイル（経営／バイヤー／部門担当）
   （ロス分析 views/loss.py は第8回打合せで画面から外した。ファイルは残している）
   競合・地域情報     … views/market.py （クローラー）
+  データ基盤         … views/pipeline.py（毎朝の自動収集で貯めたデータの状況）
 
 起動方法:  streamlit run app.py
 """
@@ -69,7 +70,7 @@ def ensure_database() -> str:
                 integrate.build(path, kind, progress=_p)
                 st.cache_data.clear()       # 別のDBを見ていたときの集計結果を捨てる
                 s.update(label="データベースの準備が完了しました", state="complete")
-        integrate.ensure(path)      # 足りないテーブルだけ作る（2回目以降は何もしない）
+        integrate.ensure(path)      # 足りないテーブルだけ作る。data/raw に増えたぶんがあれば取り込む
     return kind
 
 
@@ -433,6 +434,7 @@ def main() -> None:
         
         st.Page(page_loss_placeholder, title="ロス分析", icon="📉", url_path="loss"),
         st.Page(market.render, title="競合・地域情報", icon="📰", url_path="market"),
+        st.Page(pipeline.render, title="データ基盤", icon="🗄️", url_path="pipeline"),
     ])
     nav.run()
 

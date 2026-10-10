@@ -17,6 +17,7 @@ import logging
 import pandas as pd
 import streamlit as st
 
+from lib import charts as ch
 from lib import crawl_store
 
 logger = logging.getLogger(__name__)

@@ -14,11 +14,13 @@
 """
 from __future__ import annotations
 
+import logging
 import sqlite3
 
 import pandas as pd
 import streamlit as st
 
+from lib import gcp
 from lib.paths import APP_DIR, DATA_DIR, DUMMY_DB, REAL_DB, resolve_db_path  # noqa: F401
 
 
@@ -448,6 +450,8 @@ def db_meta() -> dict[str, str]:
 
 # --------------------------------------------------------------------------
 # ロス分析（データ班の分析ビュー。定義は scripts/analysis_views.sql）
+#   GCPの設定があれば BigQuery（scripts/gcp_setup.py が作ったもの）から読む。
+#   BigQuery に届かないときは、手元の SQLite に切り替えて画面を出し続ける。
 # --------------------------------------------------------------------------
 #@st.cache_data(show_spinner=False)
 #def loss_period() -> tuple[str, str]:
@@ -468,4 +472,4 @@ def db_meta() -> dict[str, str]:
 
 def get_discount_candidates() -> pd.DataFrame:
     """夕方の見切り推奨候補（日持ち2日以内の商品）。"""
-    return q("SELECT * FROM V_EVENING_DISCOUNT_CANDIDATES")
+    return loss_q("SELECT * FROM V_EVENING_DISCOUNT_CANDIDATES")

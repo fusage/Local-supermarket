@@ -14,6 +14,7 @@ from pathlib import Path
 APP_DIR = Path(__file__).resolve().parents[1]
 DATA_DIR = APP_DIR / "data"
 CSV_DIR = DATA_DIR / "csv"                       # データ班のCSV（M_* / T_*）
+RAW_DIR = DATA_DIR / "raw"                       # 毎日集めた生データ（data/raw/<種類>/<日付>.csv。追記のみ）
 VIEWS_SQL = APP_DIR / "scripts" / "analysis_views.sql"
 REAL_DB = DATA_DIR / "supermarket.db"
 DUMMY_DB = DATA_DIR / "supermarket_dummy.db"

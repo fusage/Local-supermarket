@@ -9,12 +9,14 @@
 """
 from __future__ import annotations
 
+import logging
 import sqlite3
 from datetime import datetime
 from typing import List, Optional, Tuple
 
 import pandas as pd
 
+from lib import gcp
 from lib.paths import resolve_db_path
 
 # テーブルごとに、保存する列(store_name と fetched_at はここで付け足す)
@@ -30,6 +32,13 @@ ORDER_BY = {
     "crawl_featured_items": "sale_date, product_name",
     "crawl_events": "start_date, title",
 }
+FEATURED_COLS = ["store_name", *FEATURED_MAP, "fetched_at"]
+EVENT_COLS = [*EVENT_MAP, "fetched_at"]
+
+
+def now() -> str:
+    """取得日時（日本時間）。1回の取得で取ったものは、すべて同じ値にそろえる。"""
+    return datetime.now(JST).replace(tzinfo=None).isoformat(sep=" ", timespec="seconds")
 
 
 def _connect() -> sqlite3.Connection:

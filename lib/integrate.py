@@ -3,12 +3,16 @@
 
   A 画面が使うテーブル   … stores / products / sales など（ER図のテーブル）
   B データ班のテーブル   … M_STORE / T_SALES など7テーブル ＋ 分析ビュー3本
-  C クローラーの取得結果 … crawl_flyers / crawl_featured_items / crawl_events
+  C クローラーの取得結果 … crawl_flyers / crawl_featured_items / crawl_events / crawl_weather / crawl_market
 
 Aは、データ班のCSV（data/csv/*.csv）があれば、それを正として組み立てます
 （lib/real_data.py。足りない期間・商品・項目は補完）。CSVが無いときだけ、
 暫定ダミーデータ（lib/sample_data.py）になります。
 そのDBファイルに、BのCSVとCの保存用テーブルを足します。
+
+Cは、毎朝 GitHub Actions が集めた生データ（data/raw/<種類>/<日付>.csv）を正とし、
+まだ取り込んでいないファイルだけを追記します（取り込み済みの記録は _ingest_log）。
+DBが消えても、生データから同じ履歴を作り直せます。
 
 何度呼んでも同じ結果になる（足りないものだけ作る）ので、起動のたびに呼んで構いません。
 このファイルは streamlit を読み込まないので、scripts/ からも使えます。
@@ -16,11 +20,13 @@ Aは、データ班のCSV（data/csv/*.csv）があれば、それを正とし�
 from __future__ import annotations
 
 import csv
+import hashlib
 import sqlite3
+from datetime import datetime
 from pathlib import Path
 
 from lib import real_data, sample_data
-from lib.paths import CSV_DIR, REAL_DB, VIEWS_SQL, resolve_db_path
+from lib.paths import CSV_DIR, DATA_DIR, RAW_DIR, REAL_DB, VIEWS_SQL, resolve_db_path
 
 # --------------------------------------------------------------------------
 # B データ班のテーブル（CSVと同じ名前・同じ列）
@@ -106,6 +112,9 @@ LOSS_VIEWS = ("V_STORE_LOSS_SUMMARY", "V_WEATHER_HYPOTHESIS_CHECK", "V_EVENING_D
 
 # --------------------------------------------------------------------------
 # C クローラーが取得した結果の保存先（lib/crawl_store.py が読み書きする）
+#   取得のたびに行を足していく履歴テーブル。fetched_at が「いつ取得したか」、
+#   source_file が「どの生データファイルから来たか」（画面から直接取得したぶんは 'live'）。
+#   画面には、最新の1回ぶんだけを返す *_latest ビューを見せる。
 # --------------------------------------------------------------------------
 CRAWL_TABLES = {
     "crawl_flyers": """
@@ -120,7 +129,8 @@ CRAWL_TABLES = {
             leaflet_id TEXT,
             image_width INTEGER,
             image_height INTEGER,
-            fetched_at TEXT NOT NULL
+            fetched_at TEXT NOT NULL,
+            source_file TEXT NOT NULL
         )
     """,
     "crawl_featured_items": """
@@ -134,7 +144,8 @@ CRAWL_TABLES = {
             is_featured INTEGER,
             image_url TEXT,
             product_url TEXT,
-            fetched_at TEXT NOT NULL
+            fetched_at TEXT NOT NULL,
+            source_file TEXT NOT NULL
         )
     """,
     "crawl_events": """
@@ -148,12 +159,91 @@ CRAWL_TABLES = {
             description TEXT,
             image_url TEXT,
             url TEXT,
-            fetched_at TEXT NOT NULL
+            fetched_at TEXT NOT NULL,
+            source_file TEXT NOT NULL
+        )
+    """,
+    "crawl_market": """
+        CREATE TABLE IF NOT EXISTS crawl_market (
+            date TEXT NOT NULL,
+            market TEXT NOT NULL,
+            category TEXT NOT NULL,
+            item TEXT NOT NULL,
+            item_code TEXT,
+            quantity_kg REAL,
+            price_per_kg REAL,
+            quantity_ratio REAL,
+            price_ratio REAL,
+            stat_inf_id TEXT,
+            fetched_at TEXT NOT NULL,
+            source_file TEXT NOT NULL
+        )
+    """,
+    "crawl_weather": """
+        CREATE TABLE IF NOT EXISTS crawl_weather (
+            date TEXT NOT NULL,
+            region_cd TEXT NOT NULL,
+            region_name TEXT,
+            weather TEXT,
+            weather_code INTEGER,
+            max_temp REAL,
+            min_temp REAL,
+            precipitation REAL,
+            is_forecast INTEGER NOT NULL,
+            fetched_at TEXT NOT NULL,
+            source_file TEXT NOT NULL
         )
     """,
 }
 
+# 最新の1回ぶんだけを返すビュー（画面はこちらを読む）
+CRAWL_VIEWS = {
+    "crawl_flyers_latest": """
+        SELECT * FROM crawl_flyers f
+        WHERE fetched_at = (SELECT MAX(fetched_at) FROM crawl_flyers g WHERE g.store_name = f.store_name)
+    """,
+    "crawl_featured_items_latest": """
+        SELECT * FROM crawl_featured_items f
+        WHERE fetched_at = (SELECT MAX(fetched_at) FROM crawl_featured_items g
+                            WHERE g.store_name = f.store_name)
+    """,
+    "crawl_events_latest": """
+        SELECT * FROM crawl_events WHERE fetched_at = (SELECT MAX(fetched_at) FROM crawl_events)
+    """,
+    # 同じ日の天気は何度も取得される（予報→実績）ので、日ごとに一番新しい取得を採用する。
+    # temp_diff_prev_day は M_WEATHER と同じく「最高気温の前日差」。
+    "crawl_weather_latest": """
+        SELECT date, region_cd, region_name, weather, weather_code, max_temp, min_temp,
+               precipitation, is_forecast, fetched_at,
+               ROUND(max_temp - LAG(max_temp) OVER (PARTITION BY region_cd ORDER BY date), 1)
+                   AS temp_diff_prev_day
+        FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY date, region_cd ORDER BY fetched_at DESC) rn
+              FROM crawl_weather)
+        WHERE rn = 1
+    """,
+}
+
+# 生データの種類（data/raw/<種類>/）→ 取り込み先のテーブル
+RAW_SOURCES = {
+    "flyers": "crawl_flyers",
+    "featured": "crawl_featured_items",
+    "events": "crawl_events",
+    "weather": "crawl_weather",
+    "market": "crawl_market",          # 卸売相場（取引日ごとに1ファイル）
+}
+
+INGEST_LOG = """
+    CREATE TABLE IF NOT EXISTS _ingest_log (
+        path TEXT PRIMARY KEY,
+        source TEXT NOT NULL,
+        sha1 TEXT NOT NULL,
+        rows INTEGER NOT NULL,
+        loaded_at TEXT NOT NULL
+    )
+"""
+
 _done: set[str] = set()   # このプロセスで統合済みのDBファイル
+_raw_seen: dict[str, tuple] = {}   # DBファイルごとに、最後に取り込んだときの生データの状態
 
 
 def _objects(con: sqlite3.Connection) -> set[str]:
@@ -187,25 +277,107 @@ def load_loss_tables(con: sqlite3.Connection) -> dict[str, int]:
     return counts
 
 
-def ensure(db_path: str | Path, force: bool = False) -> None:
-    """DBファイルに、データ班のテーブル・ビューとクローラー用テーブルを用意する。
+def _columns(con: sqlite3.Connection, table: str) -> set[str]:
+    return {r[1] for r in con.execute(f"PRAGMA table_info({table})")}
 
-    force=True のときは、CSVを読み直してデータ班のテーブルを作り直す（CSVを更新したとき用）。
+
+def create_crawl_tables(con: sqlite3.Connection) -> None:
+    """クローラー用の履歴テーブルと *_latest ビュー、取り込み記録を用意する。"""
+    for table, ddl in CRAWL_TABLES.items():
+        cols = _columns(con, table)
+        if cols and "source_file" not in cols:
+            # 履歴を持つ前の古い形（最新1回ぶんだけ）。中身は生データから入れ直せるので作り直す
+            con.execute(f"DROP TABLE {table}")
+        con.execute(ddl)
+    for view, sql in CRAWL_VIEWS.items():
+        con.execute(f"DROP VIEW IF EXISTS {view}")
+        con.execute(f"CREATE VIEW {view} AS {sql}")
+    con.execute(INGEST_LOG)
+
+
+def _raw_files() -> list[tuple[str, Path]]:
+    """取り込み対象の生データファイル（種類, パス）。"""
+    return [(src, f) for src in RAW_SOURCES for f in sorted((RAW_DIR / src).glob("*.csv"))]
+
+
+def _raw_fingerprint() -> tuple:
+    """生データの状態（ファイル名・大きさ・更新時刻）。変わっていなければ取り込みを省く。"""
+    out = []
+    for _, f in _raw_files():
+        s = f.stat()
+        out.append((f.as_posix(), s.st_size, s.st_mtime_ns))
+    return tuple(out)
+
+
+def ingest_raw(con: sqlite3.Connection) -> dict[str, int]:
+    """まだ取り込んでいない（または中身が変わった）生データファイルだけをDBに追記する。
+
+    取り込み直すときは、そのファイルから来た行を消してから入れるので、
+    何度呼んでも行が重複しない。戻り値は {ファイル: 行数}。
     """
+    done = dict(con.execute("SELECT path, sha1 FROM _ingest_log"))
+    loaded = {}
+    for src, f in _raw_files():
+        rel = f.relative_to(DATA_DIR).as_posix()        # 例: raw/weather/2026-10-01.csv
+        body = f.read_bytes()
+        sha = hashlib.sha1(body).hexdigest()
+        if done.get(rel) == sha:
+            continue
+        table = RAW_SOURCES[src]
+        reader = csv.reader(body.decode("utf-8-sig").splitlines())
+        header = next(reader, None)
+        if not header:
+            continue
+        have = _columns(con, table) - {"source_file"}
+        idx = [i for i, c in enumerate(header) if c in have]
+        cols = [header[i] for i in idx] + ["source_file"]
+        rows = [tuple((r[i] if i < len(r) and r[i] != "" else None) for i in idx) + (rel,)
+                for r in reader if r]
+        con.execute(f"DELETE FROM {table} WHERE source_file=?", (rel,))
+        con.executemany(f"INSERT INTO {table} ({', '.join(cols)}) "
+                        f"VALUES ({', '.join('?' * len(cols))})", rows)
+        con.execute("INSERT OR REPLACE INTO _ingest_log VALUES (?, ?, ?, ?, ?)",
+                    (rel, src, sha, len(rows), datetime.now().isoformat(sep=" ", timespec="seconds")))
+        loaded[rel] = len(rows)
+    return loaded
+
+
+def sync_raw(db_path: str | Path) -> dict[str, int]:
+    """生データが増えていれば、そのぶんをDBに取り込む（増えていなければ何もしない）。"""
     key = str(db_path)
-    if key in _done and not force:
-        return
+    fp = _raw_fingerprint()
+    if _raw_seen.get(key) == fp:
+        return {}
     con = sqlite3.connect(key, timeout=30)
     try:
-        have = _objects(con)
-        if force or not (set(LOSS_TABLES) | set(LOSS_VIEWS)) <= have:
-            load_loss_tables(con)
-        for ddl in CRAWL_TABLES.values():
-            con.execute(ddl)
+        create_crawl_tables(con)
+        loaded = ingest_raw(con)
         con.commit()
     finally:
         con.close()
-    _done.add(key)
+    _raw_seen[key] = fp
+    return loaded
+
+
+def ensure(db_path: str | Path, force: bool = False) -> dict[str, int]:
+    """DBファイルに、データ班のテーブル・ビューとクローラー用テーブルを用意する。
+
+    force=True のときは、CSVを読み直してデータ班のテーブルを作り直す（CSVを更新したとき用）。
+    生データ（data/raw）が増えていれば、そのぶんを取り込む（戻り値は取り込んだ {ファイル: 行数}）。
+    """
+    key = str(db_path)
+    if key not in _done or force:
+        con = sqlite3.connect(key, timeout=30)
+        try:
+            have = _objects(con)
+            if force or not (set(LOSS_TABLES) | set(LOSS_VIEWS)) <= have:
+                load_loss_tables(con)
+            create_crawl_tables(con)
+            con.commit()
+        finally:
+            con.close()
+        _done.add(key)
+    return sync_raw(db_path)
 
 
 # --------------------------------------------------------------------------
@@ -228,5 +400,11 @@ def build(path: Path, kind: str, progress=None) -> None:
     tmp = path.with_name(path.name + ".building")
     generate = real_data.generate if kind == "real" else sample_data.generate
     generate(tmp, progress=progress)
+    for key in (str(tmp), str(path)):      # 新しいファイルなので、統合・取り込みをやり直させる
+        _done.discard(key)
+        _raw_seen.pop(key, None)
     ensure(tmp)
     tmp.replace(path)
+    _raw_seen[str(path)] = _raw_seen.pop(str(tmp), ())
+    _done.discard(str(tmp))
+    _done.add(str(path))
